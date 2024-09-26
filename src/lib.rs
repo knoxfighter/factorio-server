@@ -1,6 +1,7 @@
+pub(crate) mod cache;
+mod data;
 mod error;
-mod instance;
-mod cache;
-mod manager;
 mod factorio_tracker;
-
+pub mod instance;
+pub mod manager;
+pub(crate) mod utilities;

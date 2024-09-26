@@ -1,5 +1,6 @@
 use crate::error::ServerError;
 use crate::factorio_tracker::FactorioTracker;
+use crate::utilities::get_random_port;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rcon::Connection;
@@ -9,10 +10,10 @@ use std::process::Stdio;
 use std::time::Duration;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
-use tokio::net::{TcpListener, TcpStream};
+use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
 use tokio::sync::broadcast::channel;
-use tokio::sync::watch::{Receiver, Sender};
+use tokio::sync::watch::Sender;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
 
@@ -31,6 +32,7 @@ pub enum Status {
 pub struct Instance {
     settings: InstanceSettings,
 
+    path: PathBuf,
     process: Child,
     status: Sender<Status>,
     tracker: FactorioTracker,
@@ -38,10 +40,10 @@ pub struct Instance {
 }
 
 pub struct InstanceSettings {
-    pub factorio_path: PathBuf,
     pub executable_path: PathBuf,
     pub saves_path: PathBuf,
 
+    pub factorio_version: String,
     pub save: String, // Insert a save out of the `data` dir
 
     pub host: IpAddr,
@@ -54,18 +56,18 @@ pub struct InstanceSettings {
 
 impl InstanceSettings {
     // This also sets the default values
-    pub async fn new(factorio_path: impl AsRef<Path>, save: String) -> Result<Self, ServerError> {
+    pub fn new(save: String, factorio_version: String) -> Result<Self, ServerError> {
         let default_addr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
 
         Ok(Self {
-            factorio_path: factorio_path.as_ref().to_path_buf(),
             executable_path: Self::default_executable_path(),
             saves_path: "saves".into(),
+            factorio_version,
             save,
             host: default_addr,
             port: 34197u16,
             rcon_host: default_addr,
-            rcon_port: Self::get_random_port(default_addr).await?,
+            rcon_port: 0u16,
             rcon_pass: rand::thread_rng()
                 .sample_iter(&Alphanumeric)
                 .take(16)
@@ -74,89 +76,101 @@ impl InstanceSettings {
         })
     }
 
-    fn default_executable_path() -> PathBuf {
+    pub(crate) fn default_executable_path() -> PathBuf {
         #[cfg(target_os = "windows")]
         return "bin/x64/factorio.exe".into();
         #[cfg(not(target_os = "windows"))]
         return "bin/x64/factorio".into();
     }
 
-    async fn get_random_port(addr: IpAddr) -> Result<u16, ServerError> {
-        let listener = TcpListener::bind((addr, 0)).await?;
+    // If this is set, there have to be some changed to the "config-path.cfg", i am not even sure if that is supported at all.
+    // pub fn executable_path(&mut self, executable_path: impl AsRef<Path>) -> &mut Self {
+    //     self.executable_path = executable_path.as_ref().to_path_buf();
+    //     self
+    // }
 
-        let port = listener.local_addr()?.port();
-
-        Ok(port)
-    }
-
-    pub fn executable_path(&mut self, executable_path: impl AsRef<Path>) {
-        self.executable_path = executable_path.as_ref().to_path_buf();
-    }
-
-    pub fn saves_path(&mut self, saves_path: impl AsRef<Path>) {
+    pub fn saves_path(&mut self, saves_path: impl AsRef<Path>) -> &mut Self {
         self.saves_path = saves_path.as_ref().to_path_buf();
+        self
     }
 
-    pub fn save(&mut self, save: &str) {
+    pub fn factorio_version(&mut self, factorio_version: String) -> &mut Self {
+        self.factorio_version = factorio_version;
+        self
+    }
+
+    pub fn save(&mut self, save: &str) -> &mut Self {
         self.save = save.to_string();
+        self
     }
 
-    pub fn host(&mut self, host: IpAddr) {
+    pub fn host(&mut self, host: IpAddr) -> &mut Self {
         self.host = host;
+        self
     }
 
-    pub fn port(&mut self, port: u16) {
+    pub fn port(&mut self, port: u16) -> &mut Self {
         self.port = port;
+        self
     }
 
-    pub fn rcon_host(&mut self, host: IpAddr) {
+    pub fn rcon_host(&mut self, host: IpAddr) -> &mut Self {
         self.rcon_host = host;
+        self
     }
 
-    pub fn rcon_port(&mut self, port: u16) {
+    pub fn rcon_port(&mut self, port: u16) -> &mut Self {
         self.rcon_port = port;
+        self
     }
 
-    pub fn rcon_pass(mut self, pass: String) {
+    pub fn rcon_pass(&mut self, pass: String) -> &mut Self {
         self.rcon_pass = pass;
+        self
     }
 }
 
 impl Instance {
-    pub async fn start(settings: InstanceSettings) -> Result<Self, ServerError> {
-        let exec_path = settings.factorio_path.join(&settings.executable_path);
+    pub(crate) async fn start(
+        settings: InstanceSettings,
+        factorio_path: impl AsRef<Path>,
+    ) -> Result<Self, ServerError> {
+        let factorio_path = factorio_path.as_ref();
+        let exec_path = factorio_path.join(&settings.executable_path);
 
-        let save_path = settings
-            .factorio_path
+        let save_path = factorio_path
             .join(&settings.saves_path)
             .join(&settings.save);
 
         let (sender, mut recv) = channel::<String>(32);
-        
-        // TODO: remove this line as soon as the folder is cleaned up properly.
-        let current = settings.factorio_path.join("factorio-current.log");
-        std::fs::remove_file(&current).ok();
 
         let tracker = FactorioTracker::watch(
-            settings.factorio_path.join("factorio-current.log"),
-            settings.factorio_path.join(PID_FILE_NAME),
+            factorio_path.join("factorio-current.log"),
+            factorio_path.join(PID_FILE_NAME),
             sender,
         );
 
+        let rcon_port = if settings.rcon_port != 0 {
+            settings.rcon_port
+        } else {
+            get_random_port(settings.rcon_host).await?
+        };
+
         let mut command = Command::new(exec_path);
         command
-            .current_dir(&settings.factorio_path)
+            .current_dir(factorio_path)
             .args([
                 "--start-server",
                 save_path.to_str().ok_or(ServerError::Utf8Error())?,
                 "--console-log",
-                "test.log",
+                "console.log",
+                "--no-log-rotation",
                 "--bind",
                 settings.host.to_string().as_str(),
                 "--port",
                 settings.port.to_string().as_str(),
                 "--rcon-bind",
-                format!("{}:{}", settings.rcon_host, settings.rcon_port).as_str(),
+                format!("{}:{}", settings.rcon_host, rcon_port).as_str(),
                 "--rcon-password",
                 settings.rcon_pass.as_str(),
             ])
@@ -167,8 +181,10 @@ impl Instance {
         let process = command.spawn()?;
 
         // save pid
-        let pid = process.id().ok_or(ServerError::NotAllowed("Process has no pid".into()))?;
-        let pid_path = settings.factorio_path.join(PID_FILE_NAME);
+        let pid = process
+            .id()
+            .ok_or(ServerError::NotAllowed("Process has no pid".into()))?;
+        let pid_path = factorio_path.join(PID_FILE_NAME);
         let mut pid_file = File::create(pid_path).await?;
         pid_file.write_all(pid.to_string().as_bytes()).await?;
 
@@ -199,7 +215,8 @@ impl Instance {
             Ok(())
         });
 
-        Ok(Self{
+        Ok(Self {
+            path: factorio_path.into(),
             settings,
             process,
             status: status_sender2,
@@ -234,14 +251,17 @@ impl Instance {
         let mut status = self.status.subscribe();
         let _ = status.wait_for(|val| *val == Status::Closed).await?;
 
-        if timeout(Duration::from_secs(3), self.process.wait()).await.is_err() {
+        if timeout(Duration::from_secs(3), self.process.wait())
+            .await
+            .is_err()
+        {
             self.process.kill().await.ok();
             self.process.wait().await.ok();
         }
 
         Ok(())
     }
-    
+
     async fn send_command_internal(&self, command: &str) -> Result<(), ServerError> {
         let mut connection = <Connection<TcpStream>>::builder()
             .enable_factorio_quirks(true)
@@ -272,9 +292,10 @@ impl Instance {
         let mut status = self.status.subscribe();
         let status = status.borrow_and_update();
         if *status != expected {
-            return Err(ServerError::NotAllowed(
-                format!("Status not as expected {:?} != {:?}", *status, expected),
-            ));
+            return Err(ServerError::NotAllowed(format!(
+                "Status not as expected {:?} != {:?}",
+                *status, expected
+            )));
         }
 
         Ok(())
@@ -289,9 +310,10 @@ impl Instance {
             let mut status = self.status.subscribe();
             let status = status.borrow_and_update();
             if *status != expected {
-                return Err(ServerError::NotAllowed(
-                    format!("Status (with set) not as expected {:?} != {:?}", *status, expected),
-                ));
+                return Err(ServerError::NotAllowed(format!(
+                    "Status (with set) not as expected {:?} != {:?}",
+                    *status, expected
+                )));
             }
         }
         self.status.send_replace(new_status);
@@ -308,22 +330,26 @@ mod test {
 
     #[tokio::test]
     async fn start_kill() {
-        let settings = InstanceSettings::new(get_factorio_path(), "test3.zip".into())
+        let settings = InstanceSettings::new("test3.zip".into(), "1.1.109".to_string())
             .await
             .unwrap();
 
-        let mut instance = Instance::start(settings).await.unwrap();
+        let mut instance = Instance::start(settings, get_factorio_path())
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_secs(15)).await;
         instance.kill().await.unwrap();
     }
 
     #[tokio::test]
     async fn start_stop() {
-        let settings = InstanceSettings::new(get_factorio_path(), "test3.zip".into())
+        let settings = InstanceSettings::new("test3.zip".into(), "1.1.109".to_string())
             .await
             .unwrap();
 
-        let mut instance = Instance::start(settings).await.unwrap();
+        let mut instance = Instance::start(settings, get_factorio_path())
+            .await
+            .unwrap();
         tokio::time::sleep(Duration::from_secs(15)).await;
         if let Err(e) = instance.stop().await {
             if let ServerError::NotAllowed(_) = e {

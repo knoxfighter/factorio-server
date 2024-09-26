@@ -1,7 +1,7 @@
+use crate::instance::Status;
 use std::num::ParseIntError;
 use thiserror::Error;
 use tokio::sync::broadcast::error::{RecvError, SendError};
-use crate::instance::Status;
 
 #[derive(Error, Debug)]
 #[non_exhaustive]

@@ -1,4 +1,5 @@
 use crate::error::ServerError;
+use crate::utilities::get_file_size;
 use std::fs::Metadata;
 use std::io::SeekFrom::Start;
 use std::path::Path;
@@ -18,7 +19,11 @@ pub(crate) struct FactorioTracker {
 }
 
 impl FactorioTracker {
-    pub(crate) fn watch(factorio_log: impl AsRef<Path> + Send + Sync + 'static, factorio_pid: impl AsRef<Path> + Send + Sync + 'static, sender: Sender<String>) -> Self {
+    pub(crate) fn watch(
+        factorio_log: impl AsRef<Path> + Send + Sync + 'static,
+        factorio_pid: impl AsRef<Path> + Send + Sync + 'static,
+        sender: Sender<String>,
+    ) -> Self {
         let mut this = Self {
             handle: None,
             file_pos: 0,
@@ -39,7 +44,7 @@ impl FactorioTracker {
                     // check if file size changed
                     if let Ok(mut file) = File::open(&factorio_log).await {
                         let metadata = file.metadata().await?;
-                        let size = Self::get_file_size(metadata);
+                        let size = get_file_size(metadata);
 
                         if size < this.last_size {
                             // file got smaller, read whole file
@@ -96,7 +101,6 @@ impl FactorioTracker {
                             break 'outer;
                         }
                     }
-
                 }
                 interval.tick().await;
             }
@@ -106,18 +110,5 @@ impl FactorioTracker {
         this.handle = Some(t);
 
         this
-    }
-
-    fn get_file_size(metadata: Metadata) -> u64 {
-        #[cfg(target_family = "windows")]
-        {
-            use std::os::windows::fs::MetadataExt;
-            metadata.file_size()
-        }
-        #[cfg(target_family = "unix")]
-        {
-            use std::os::unix::fs::MetadataExt;
-            metadata.size()
-        }
     }
 }
