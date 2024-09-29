@@ -3,7 +3,7 @@ use crate::data::Data;
 use crate::error::ServerError;
 use crate::instance::{Instance, InstanceSettings};
 use crate::utilities::{symlink_file, symlink_folder};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tokio::fs::{create_dir_all, remove_dir_all, rename};
 
 pub struct Manager {
@@ -33,17 +33,20 @@ impl Manager {
         // check if instance is already there
 
         // prepare instance
-        let path = self.prepare_instance(name, &settings).await?;
+        let path = self.prepare_instance(&name, &settings).await?;
 
-        Instance::start(settings, path).await
+        Instance::start(settings, path, name, self).await
     }
 
     async fn prepare_instance(
         &self,
-        name: String,
+        name: &String,
         settings: &InstanceSettings,
     ) -> Result<PathBuf, ServerError> {
-        let factorio_path = self.instances_path.join(&name);
+        let factorio_path = self.instances_path.join(name);
+
+        // first thing: cleanup the folder we want to run in
+        remove_dir_all(&factorio_path).await?;
 
         let executable_path = factorio_path.join(&settings.executable_path);
         let executable_parent = executable_path.parent().ok_or(ServerError::NotAllowed(
@@ -69,22 +72,26 @@ impl Manager {
         Ok(factorio_path)
     }
 
-    async fn cleanup_instance(&self, name: String) -> Result<(), ServerError> {
-        let factorio_path = self.instances_path.join(&name);
-
+    pub(crate) async fn backup_logs(
+        &self,
+        factorio_path: impl AsRef<Path>,
+        name: String,
+    ) -> Result<(), ServerError> {
         let log_path = self
             .data
             .get_and_rotate_file(name.clone(), "factorio-current.log".into(), 9)
             .await?;
-        rename(factorio_path.join("factorio-current.log"), log_path).await?;
+        rename(
+            factorio_path.as_ref().join("factorio-current.log"),
+            log_path,
+        )
+        .await?;
 
         let console_log = self
             .data
             .get_and_rotate_file(name, "console.log".to_string(), 9)
             .await?;
-        rename(factorio_path.join("console.log"), console_log).await?;
-
-        remove_dir_all(factorio_path).await?;
+        rename(factorio_path.as_ref().join("console.log"), console_log).await?;
 
         Ok(())
     }
@@ -112,9 +119,5 @@ mod test {
         sleep(Duration::from_secs(5)).await;
 
         instance.stop().await.unwrap();
-        manager
-            .cleanup_instance("test_1.1.110".to_string())
-            .await
-            .unwrap();
     }
 }

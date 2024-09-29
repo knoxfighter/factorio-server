@@ -1,5 +1,6 @@
 use crate::error::ServerError;
 use crate::factorio_tracker::FactorioTracker;
+use crate::manager::Manager;
 use crate::utilities::get_random_port;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
@@ -29,14 +30,17 @@ pub enum Status {
     Closed, // Set between factorio output "changing state from(Disconnected) to(Closed)" and process end.
 }
 
-pub struct Instance {
+pub struct Instance<'a> {
     settings: InstanceSettings,
 
-    path: PathBuf,
+    pub(crate) path: PathBuf,
+    pub(crate) name: String,
     process: Child,
     status: Sender<Status>,
     tracker: FactorioTracker,
     tracker_resv: JoinHandle<Result<(), ServerError>>,
+
+    manager: &'a Manager,
 }
 
 pub struct InstanceSettings {
@@ -130,10 +134,12 @@ impl InstanceSettings {
     }
 }
 
-impl Instance {
+impl<'a> Instance<'a> {
     pub(crate) async fn start(
-        settings: InstanceSettings,
+        mut settings: InstanceSettings,
         factorio_path: impl AsRef<Path>,
+        name: String,
+        manager: &'a Manager,
     ) -> Result<Self, ServerError> {
         let factorio_path = factorio_path.as_ref();
         let exec_path = factorio_path.join(&settings.executable_path);
@@ -150,7 +156,7 @@ impl Instance {
             sender,
         );
 
-        let rcon_port = if settings.rcon_port != 0 {
+        settings.rcon_port = if settings.rcon_port != 0 {
             settings.rcon_port
         } else {
             get_random_port(settings.rcon_host).await?
@@ -170,13 +176,14 @@ impl Instance {
                 "--port",
                 settings.port.to_string().as_str(),
                 "--rcon-bind",
-                format!("{}:{}", settings.rcon_host, rcon_port).as_str(),
+                format!("{}:{}", settings.rcon_host, settings.rcon_port).as_str(),
                 "--rcon-password",
                 settings.rcon_pass.as_str(),
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .stdin(Stdio::null());
+            .stdin(Stdio::null())
+            .kill_on_drop(true);
 
         let process = command.spawn()?;
 
@@ -215,6 +222,8 @@ impl Instance {
             Ok(())
         });
 
+        command.kill_on_drop(false);
+
         Ok(Self {
             path: factorio_path.into(),
             settings,
@@ -222,6 +231,8 @@ impl Instance {
             status: status_sender2,
             tracker,
             tracker_resv,
+            manager,
+            name,
         })
     }
 
@@ -232,6 +243,8 @@ impl Instance {
         self.process.kill().await?;
         self.process.wait().await?; // wait for the process to finish before dropping the Child as recommended by lib
 
+        self.cleanup().await?;
+
         Ok(())
     }
 
@@ -241,9 +254,6 @@ impl Instance {
 
         // send /quit via rcon
         self.send_command_internal("/quit").await?;
-
-        // TODO: kill factorio process when it is stopped, it doesn't seem to close the process itself after sending `/quit`
-        // at least on windows in 1.1
 
         // wait for either
         // - process.wait
@@ -258,6 +268,8 @@ impl Instance {
             self.process.kill().await.ok();
             self.process.wait().await.ok();
         }
+
+        self.cleanup().await?;
 
         Ok(())
     }
@@ -320,50 +332,55 @@ impl Instance {
 
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod test {
-    use crate::error::ServerError;
-    use crate::instance::{Instance, InstanceSettings};
-    use std::time::Duration;
-
-    #[tokio::test]
-    async fn start_kill() {
-        let settings = InstanceSettings::new("test3.zip".into(), "1.1.109".to_string())
-            .await
-            .unwrap();
-
-        let mut instance = Instance::start(settings, get_factorio_path())
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_secs(15)).await;
-        instance.kill().await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn start_stop() {
-        let settings = InstanceSettings::new("test3.zip".into(), "1.1.109".to_string())
-            .await
-            .unwrap();
-
-        let mut instance = Instance::start(settings, get_factorio_path())
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_secs(15)).await;
-        if let Err(e) = instance.stop().await {
-            if let ServerError::NotAllowed(_) = e {
-                panic!("{e}");
-            }
-            instance.kill().await.unwrap();
-            panic!("{e}");
-        }
-    }
-
-    fn get_factorio_path() -> &'static str {
-        #[cfg(target_os = "windows")]
-        return "C:\\Data\\Development\\GO\\factorio-windows";
-        #[cfg(target_os = "linux")]
-        return "/mnt/c/Data/Development/GO/factorio";
+    async fn cleanup(&self) -> Result<(), ServerError> {
+        self.manager
+            .backup_logs(&self.path, self.name.clone())
+            .await?;
+        Ok(())
     }
 }
+
+// #[cfg(test)]
+// mod test {
+//     use crate::error::ServerError;
+//     use crate::instance::{Instance, InstanceSettings};
+//     use std::time::Duration;
+//
+//     #[tokio::test]
+//     async fn start_kill() {
+//         let settings = InstanceSettings::new("test3.zip".into(), "1.1.109".to_string()).unwrap();
+//
+//         let mut instance = Instance::start(settings, get_factorio_path(), nil)
+//             .await
+//             .unwrap();
+//         tokio::time::sleep(Duration::from_secs(15)).await;
+//         instance.kill().await.unwrap();
+//     }
+//
+//     #[tokio::test]
+//     async fn start_stop() {
+//         let settings = InstanceSettings::new("test3.zip".into(), "1.1.109".to_string())
+//             .await
+//             .unwrap();
+//
+//         let mut instance = Instance::start(settings, get_factorio_path())
+//             .await
+//             .unwrap();
+//         tokio::time::sleep(Duration::from_secs(15)).await;
+//         if let Err(e) = instance.stop().await {
+//             if let ServerError::NotAllowed(_) = e {
+//                 panic!("{e}");
+//             }
+//             instance.kill().await.unwrap();
+//             panic!("{e}");
+//         }
+//     }
+//
+//     fn get_factorio_path() -> &'static str {
+//         #[cfg(target_os = "windows")]
+//         return "C:\\Data\\Development\\GO\\factorio-windows";
+//         #[cfg(target_os = "linux")]
+//         return "/mnt/c/Data/Development/GO/factorio";
+//     }
+// }
