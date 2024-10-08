@@ -5,9 +5,18 @@ edition = "2021"
 
 [dependencies]
 thiserror = "1.0.63"
-tokio = { version = "1.39.3", features = ["full"]}
+tokio = { version = "1.40.0", features = ["full"]}
 rand = "0.8.5"
 notify = "6.1.1"
 futures = "0.3.30"
 sysinfo = "0.31.4"
 rcon = { version = "0.6.0", features = ["rt-tokio"] }
+reqwest = { version = "0.12.7", features = ["rustls-tls", "stream", "json", "cookies"] }
+tokio-util = { version = "0.7.12", features = ["compat"] }
+async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "xz", "deflate"] }
+futures-lite = "2.3.0"
+sanitize-filename = "0.5.0"
+async-compression = { version = "0.4.13", features = ["tokio", "xz"] }
+tokio-tar = "0.3.1"
+serde = { version = "1.0.210", features = ["derive"] }
+serde_json = "1.0.128"

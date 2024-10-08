@@ -14,15 +14,15 @@ pub struct Manager {
 }
 
 impl Manager {
-    pub fn new(root_path: impl Into<PathBuf>) -> Self {
+    pub fn new(root_path: impl Into<PathBuf>) -> Result<Self, ServerError> {
         let root_path = root_path.into();
 
-        Self {
+        Ok(Self {
             root_path: root_path.clone(),
-            cache: Cache::new(root_path.join("cache")),
+            cache: Cache::new(root_path.join("cache"))?,
             data: Data::new(root_path.join("data")),
             instances_path: root_path.join("instances"),
-        }
+        })
     }
 
     pub async fn start_instance(
@@ -54,7 +54,7 @@ impl Manager {
         ))?;
         create_dir_all(&executable_parent).await?;
 
-        let version = self.cache.get_version(&settings.factorio_version).await;
+        let version = self.cache.get_version(&settings.factorio_version).await?;
 
         symlink_file(
             version.join(InstanceSettings::default_executable_path()),
@@ -111,7 +111,8 @@ mod test {
         #[cfg(target_os = "windows")]
         let manager = Manager::new("C:\\Data\\Development\\tmp\\factorio-server-root-windows");
         let settings = InstanceSettings::new("test3".to_string(), "1.1.110".to_string()).unwrap();
-        let mut instance = manager
+        let instance = manager.unwrap();
+        let mut instance = instance
             .start_instance("test_1.1.110".to_string(), settings)
             .await
             .unwrap();

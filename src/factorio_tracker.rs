@@ -1,10 +1,8 @@
 use crate::error::ServerError;
 use crate::utilities::get_file_size;
-use std::fs::Metadata;
 use std::io::SeekFrom::Start;
 use std::path::Path;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::Duration;
 use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
 use tokio::fs::File;

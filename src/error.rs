@@ -1,4 +1,6 @@
+use crate::credentials::CredentialsFailure;
 use crate::instance::Status;
+use async_zip::error::ZipError;
 use std::num::ParseIntError;
 use thiserror::Error;
 use tokio::sync::broadcast::error::{RecvError, SendError};
@@ -24,4 +26,12 @@ pub enum ServerError {
     WatchChannelRecvError(#[from] tokio::sync::watch::error::RecvError),
     #[error("parse int error: {0}")]
     ParseIntError(#[from] ParseIntError),
+    #[error("ReqwestError: {0}")]
+    ReqwestError(#[from] reqwest::Error),
+    #[error("ZipError: {0}")]
+    ZipError(#[from] ZipError),
+    #[error("CredentialsFailure: {0}")]
+    CredentialsFailure(#[from] CredentialsFailure),
+    #[error("SerdeJsonError: {0}")]
+    SerdeJsonError(#[from] serde_json::error::Error),
 }

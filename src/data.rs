@@ -1,6 +1,5 @@
 use crate::error::ServerError;
 use crate::utilities::get_file_size;
-use std::fmt::format;
 use std::fs::remove_file;
 use std::io;
 use std::path::{Path, PathBuf};
