@@ -1,9 +1,11 @@
+use std::collections::HashMap;
 use crate::credentials::CredentialManager;
 use crate::drop_guard::DropGuard;
 use crate::error::ServerError;
 use futures::TryStreamExt;
 use std::fs::{exists, remove_dir_all};
 use std::path::{Path, PathBuf};
+use scraper::Selector;
 use tokio::fs::create_dir_all;
 use tokio::io::BufReader;
 use tokio_util::io::StreamReader;
@@ -31,7 +33,6 @@ impl Cache {
     ) -> Result<PathBuf, ServerError> {
         let path = self.factorio_dir.join(version.as_ref());
         if exists(&path)? {
-            println!("{:?} already exists", path);
             return Ok(path);
         }
 
@@ -47,8 +48,6 @@ impl Cache {
 
         Ok(path)
     }
-
-    // TODO: add downloaded and available versions
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     async fn download_factorio(
@@ -116,7 +115,7 @@ impl Cache {
             } else {
                 // Creates parent directories. They may not exist if iteration is out of order
                 // or the archive does not contain directory entries.
-                let parent = path.parent().ok_or(ServerError::NotAllowed(
+                let parent = path.parent().ok_or(ServerError::DownloadError(
                     "This file has no parent".to_string(),
                 ))?;
                 if !parent.is_dir() {
@@ -164,7 +163,7 @@ impl Cache {
         archive.unpack(&path).await?;
 
         let mut entries = tokio::fs::read_dir(&path).await?;
-        let entry = entries.next_entry().await?.ok_or(ServerError::NotAllowed(
+        let entry = entries.next_entry().await?.ok_or(ServerError::DownloadError(
             "missing subfolder after extracting tar".to_string(),
         ))?;
 
@@ -186,6 +185,32 @@ impl Cache {
 
         Ok(())
     }
+
+    // return (available, downloaded)
+    pub async fn get_available_versions(&self) -> Result<HashMap<String, (bool, bool)>, ServerError> {
+        let mut versions = HashMap::new();
+
+        let mut dir_reader = tokio::fs::read_dir(&self.factorio_dir).await?;
+        while let Some(file) = dir_reader.next_entry().await? {
+            let name = file.file_name().to_str().unwrap().into();
+            let value = versions.entry(name).or_insert((false, false));
+            value.1 = true;
+        }
+
+        let downloadable = reqwest::get("https://www.factorio.com/download/archive/").await?.text().await?;
+        let document = scraper::Html::parse_document(&downloadable);
+        let selector = Selector::parse("a.slot-button-inline").unwrap();
+        for elem in document.select(&selector) {
+            let link = elem.attr("href").ok_or(ServerError::DownloadError("no href present".to_string()))?;
+
+            let version = link.split("/").last().ok_or(ServerError::DownloadError("href link is wrongly formatted".to_string()))?;
+
+            let value = versions.entry(version.to_string()).or_insert((false, false));
+            value.0 = true;
+        }
+
+        Ok(versions)
+    }
 }
 
 #[cfg(test)]
@@ -200,5 +225,9 @@ mod test {
         // cache.credentials.login("asdff45", "<pw>").await.unwrap();
         // cache.credentials.save().unwrap();
         cache.get_version(&"1.1.110".to_string()).await.unwrap();
+
+        let versions = cache.get_available_versions().await.unwrap();
+        println!("{:?}", versions);
+        panic!("something, so log is shown");
     }
 }

@@ -34,4 +34,6 @@ pub enum ServerError {
     CredentialsFailure(#[from] CredentialsFailure),
     #[error("SerdeJsonError: {0}")]
     SerdeJsonError(#[from] serde_json::error::Error),
+    #[error("Download Error: {0}")]
+    DownloadError(String)
 }
