@@ -10,7 +10,7 @@ use tokio::fs::create_dir_all;
 use tokio::io::BufReader;
 use tokio_util::io::StreamReader;
 
-pub(crate) struct Cache {
+pub struct Cache {
     root_path: PathBuf,
     factorio_dir: PathBuf,
     mods_dir: PathBuf,
@@ -178,7 +178,6 @@ impl Cache {
             // Define destination path in the parent directory
             let dest_path = path.as_ref().join(file_name);
 
-            println!("{:?} -> {:?}", sub_path, dest_path);
             tokio::fs::rename(&sub_path, &dest_path).await?;
         }
         tokio::fs::remove_dir(&entry.path()).await?;
@@ -210,6 +209,18 @@ impl Cache {
         }
 
         Ok(versions)
+    }
+    
+    pub async fn delete_version(&self, version: impl AsRef<str>) -> Result<(), ServerError> {
+        let version = version.as_ref();
+        
+        let dir = self.factorio_dir.join(version);
+        if !dir.exists() {
+            return Err(ServerError::NotAllowed("version doesn't exist".to_string()))
+        }
+        tokio::fs::remove_dir_all(&dir).await?;
+        
+        Ok(())
     }
 }
 
