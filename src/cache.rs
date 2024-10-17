@@ -2,19 +2,23 @@ use std::collections::HashMap;
 use crate::credentials::CredentialManager;
 use crate::drop_guard::DropGuard;
 use crate::error::ServerError;
-use futures::TryStreamExt;
+use futures::{StreamExt, TryStreamExt};
 use std::fs::{exists, remove_dir_all};
 use std::path::{Path, PathBuf};
+use reqwest::Client;
 use scraper::Selector;
-use tokio::fs::create_dir_all;
-use tokio::io::BufReader;
+use tokio::fs::{create_dir_all, File};
+use tokio::io::{AsyncWriteExt, BufReader};
 use tokio_util::io::StreamReader;
+use crate::mod_portal::ModPortal;
 
 pub struct Cache {
     root_path: PathBuf,
     factorio_dir: PathBuf,
     mods_dir: PathBuf,
     credentials: CredentialManager,
+    mod_portal: ModPortal,
+    client: Client,
 }
 
 impl Cache {
@@ -24,6 +28,8 @@ impl Cache {
             mods_dir: root_path.join("mods"),
             credentials: CredentialManager::load(root_path.join("credentials.json"))?,
             root_path,
+            mod_portal: ModPortal::new()?,
+            client: Client::new(),
         })
     }
 
@@ -69,12 +75,13 @@ impl Cache {
         let credentials = self.credentials.get_credentials()?;
         let build = "alpha";
         let distro = "win64-manual";
-        let resp = reqwest::get(&format!(
+        let resp = self.client.get(format!(
             "https://www.factorio.com/get-download/{}/{build}/{distro}?username={}&token={}",
             version.as_ref(),
             credentials.username,
             credentials.token
         ))
+        .send()
         .await?
         .error_for_status()?;
         let stream = resp.bytes_stream();
@@ -144,10 +151,11 @@ impl Cache {
 
         let build = "headless";
         let distro = "linux64";
-        let resp = reqwest::get(&format!(
+        let resp = self.client.get(format!(
             "https://www.factorio.com/get-download/{}/{build}/{distro}",
             version.as_ref()
         ))
+        .send()
         .await?
         .error_for_status()?;
         let stream = resp.bytes_stream();
@@ -196,7 +204,7 @@ impl Cache {
             value.1 = true;
         }
 
-        let downloadable = reqwest::get("https://www.factorio.com/download/archive/").await?.text().await?;
+        let downloadable = self.client.get("https://www.factorio.com/download/archive/").send().await?.text().await?;
         let document = scraper::Html::parse_document(&downloadable);
         let selector = Selector::parse("a.slot-button-inline").unwrap();
         for elem in document.select(&selector) {
@@ -222,6 +230,55 @@ impl Cache {
         
         Ok(())
     }
+    
+    pub(crate) async fn get_mod(&self, name: impl AsRef<str>, version: impl AsRef<str>) -> Result<PathBuf, ServerError> {
+        let path = self.mods_dir.join(name.as_ref()).join(version.as_ref());
+        if path.exists() {
+            return Ok(path)
+        }
+    
+        if !self.credentials.has_token() {
+            return Err(ServerError::NotAllowed("credentials required".to_string()))
+        }
+
+        let result = self.mod_portal.mod_short(name.as_ref()).await?;
+        let release = result.
+            result.
+            releases
+            .ok_or(ServerError::DownloadError("no releases found".to_string()))?;
+        let release = release
+            .iter().find(|release| {
+                release.version == version.as_ref()
+            })
+            .ok_or(ServerError::DownloadError("release not found".to_string()))?;
+        
+        let path = path.join(format!("mod-{}-{}.zip", name.as_ref(), release.version));
+        self.download_mod(&path, &release.download_url).await?;
+        
+        Ok(path)
+    }
+    
+    async fn download_mod(&self, path: impl AsRef<Path>, url: impl AsRef<str>) -> Result<(), ServerError> {
+        tokio::fs::create_dir_all(path.as_ref().parent().ok_or(ServerError::NotAllowed("mod_file_path has no parent".to_string()))?).await?;
+        
+        let creds = self.credentials.get_credentials()?;
+        let url = format!("https://mods.factorio.com/{}?username={}&token={}", url.as_ref(), creds.username, creds.token);
+        
+        let res = self
+            .client
+            .get(url)
+            .send()
+            .await?
+            .error_for_status()?;
+        
+        let mut file = File::create(path.as_ref()).await?;
+        let mut content = res.bytes_stream();
+        while let Some(chunk) = content.next().await {
+            file.write_all(&chunk?).await?;
+        }
+        
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -231,14 +288,17 @@ mod test {
 
     #[tokio::test]
     async fn test() {
-        let cache = Cache::new(PathBuf::from("/tmp")).unwrap();
+        let mut cache = Cache::new(PathBuf::from("/tmp")).unwrap();
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
         // cache.credentials.login("asdff45", "<pw>").await.unwrap();
         // cache.credentials.save().unwrap();
         cache.get_version(&"1.1.110".to_string()).await.unwrap();
 
-        let versions = cache.get_available_versions().await.unwrap();
-        println!("{:?}", versions);
+        // let versions = cache.get_available_versions().await.unwrap();
+        // println!("{:?}", versions);
+
+        cache.get_mod("Bottleneck", "0.11.7").await.unwrap();
+        
         panic!("something, so log is shown");
     }
 }

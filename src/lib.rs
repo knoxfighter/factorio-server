@@ -7,3 +7,4 @@ mod factorio_tracker;
 pub mod instance;
 pub mod manager;
 pub(crate) mod utilities;
+pub mod mod_portal;
