@@ -10,6 +10,7 @@ use scraper::Selector;
 use tokio::fs::{create_dir_all, File};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio_util::io::StreamReader;
+use crate::factorio_version::FactorioVersion;
 use crate::mod_portal::ModPortal;
 
 pub struct Cache {
@@ -35,9 +36,9 @@ impl Cache {
 
     pub(crate) async fn get_version(
         &self,
-        version: impl AsRef<str>,
+        version: &FactorioVersion,
     ) -> Result<PathBuf, ServerError> {
-        let path = self.factorio_dir.join(version.as_ref());
+        let path = self.factorio_dir.join(version.to_string());
         if exists(&path)? {
             return Ok(path);
         }
@@ -58,7 +59,7 @@ impl Cache {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     async fn download_factorio(
         &self,
-        version: impl AsRef<str>,
+        version: &FactorioVersion,
         path: impl AsRef<Path>,
     ) -> Result<(), ServerError> {
         use async_zip::base::read::seek::ZipFileReader;
@@ -73,11 +74,15 @@ impl Cache {
         }
 
         let credentials = self.credentials.get_credentials()?;
-        let build = "alpha";
+        let build = if version >= &FactorioVersion::from([2, 0, 0]) {
+            "expansion"
+        } else {
+            "alpha"
+        };
         let distro = "win64-manual";
         let resp = self.client.get(format!(
             "https://www.factorio.com/get-download/{}/{build}/{distro}?username={}&token={}",
-            version.as_ref(),
+            version,
             credentials.username,
             credentials.token
         ))
@@ -143,7 +148,7 @@ impl Cache {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     async fn download_factorio(
         &self,
-        version: impl AsRef<str>,
+        version: &FactorioVersion,
         path: impl AsRef<Path>,
     ) -> Result<(), ServerError> {
         use async_compression::tokio::bufread::XzDecoder;
@@ -153,7 +158,7 @@ impl Cache {
         let distro = "linux64";
         let resp = self.client.get(format!(
             "https://www.factorio.com/get-download/{}/{build}/{distro}",
-            version.as_ref()
+            version
         ))
         .send()
         .await?
@@ -233,6 +238,8 @@ impl Cache {
     
     pub(crate) async fn get_mod(&self, name: impl AsRef<str>, version: impl AsRef<str>) -> Result<PathBuf, ServerError> {
         let path = self.mods_dir.join(name.as_ref()).join(version.as_ref());
+        let path = path.join(format!("{}_{}.zip", name.as_ref(), version.as_ref()));
+        
         if path.exists() {
             return Ok(path)
         }
@@ -252,7 +259,7 @@ impl Cache {
             })
             .ok_or(ServerError::DownloadError("release not found".to_string()))?;
         
-        let path = path.join(format!("mod-{}-{}.zip", name.as_ref(), release.version));
+        
         self.download_mod(&path, &release.download_url).await?;
         
         Ok(path)
@@ -292,7 +299,7 @@ mod test {
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
         // cache.credentials.login("asdff45", "<pw>").await.unwrap();
         // cache.credentials.save().unwrap();
-        cache.get_version(&"1.1.110".to_string()).await.unwrap();
+        cache.get_version(&FactorioVersion::from([1, 1, 110])).await.unwrap();
 
         // let versions = cache.get_available_versions().await.unwrap();
         // println!("{:?}", versions);

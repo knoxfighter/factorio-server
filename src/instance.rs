@@ -17,6 +17,7 @@ use tokio::sync::broadcast::channel;
 use tokio::sync::watch::Sender;
 use tokio::task::JoinHandle;
 use tokio::time::timeout;
+use crate::factorio_version::FactorioVersion;
 
 const PID_FILE_NAME: &str = "factorio.pid";
 
@@ -43,11 +44,28 @@ pub struct Instance<'a> {
     manager: &'a Manager,
 }
 
+pub struct BaseMods {
+    pub base: bool, // always has to be enabled
+    pub elevated_rails: bool,
+    pub quality: bool,
+    pub space_age: bool,
+}
+impl Default for BaseMods {
+    fn default() -> Self {
+        Self {
+            base: true,
+            elevated_rails: true,
+            quality: true,
+            space_age: true,
+        }
+    }
+}
+
 pub struct InstanceSettings {
     pub executable_path: PathBuf,
     pub saves_path: PathBuf,
 
-    pub factorio_version: String,
+    pub factorio_version: FactorioVersion,
     pub save: String, // Insert a save out of the `data` dir
 
     pub host: IpAddr,
@@ -56,11 +74,14 @@ pub struct InstanceSettings {
     pub rcon_host: IpAddr,
     pub rcon_port: u16,
     pub rcon_pass: String,
+    
+    pub mods: Vec<(String, String)>,
+    pub base_mods: BaseMods,
 }
 
 impl InstanceSettings {
     // This also sets the default values
-    pub fn new(save: String, factorio_version: String) -> Result<Self, ServerError> {
+    pub fn new(save: String, factorio_version: FactorioVersion) -> Result<Self, ServerError> {
         let default_addr = IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0));
 
         Ok(Self {
@@ -77,6 +98,8 @@ impl InstanceSettings {
                 .take(16)
                 .map(char::from)
                 .collect(),
+            mods: vec![],
+            base_mods: BaseMods::default(),
         })
     }
 
@@ -98,7 +121,7 @@ impl InstanceSettings {
         self
     }
 
-    pub fn factorio_version(&mut self, factorio_version: String) -> &mut Self {
+    pub fn factorio_version(&mut self, factorio_version: FactorioVersion) -> &mut Self {
         self.factorio_version = factorio_version;
         self
     }
@@ -132,6 +155,28 @@ impl InstanceSettings {
         self.rcon_pass = pass;
         self
     }
+    
+    pub fn mods(&mut self, mods: Vec<(String, String)>) -> &mut Self {
+        self.mods = mods;
+        self
+    }
+    
+    pub fn add_mod(&mut self, name: impl AsRef<str>, version: impl AsRef<str>) -> &mut Self {
+        self.mods.push((name.as_ref().to_string(), version.as_ref().to_string()));
+        self
+    }
+    
+    pub fn with_space_age(&mut self) -> &mut Self {
+        self.base_mods.space_age = true;
+        self.base_mods.quality = true;
+        self.base_mods.elevated_rails = true;
+        self
+    }
+    
+    pub fn base_mods(&mut self, base_mods: BaseMods) -> &mut Self {
+        self.base_mods = base_mods;
+        self
+    }
 }
 
 impl<'a> Instance<'a> {
@@ -146,7 +191,8 @@ impl<'a> Instance<'a> {
 
         let save_path = factorio_path
             .join(&settings.saves_path)
-            .join(&settings.save);
+            .join(&settings.save)
+            .with_extension("zip");
 
         let (sender, mut recv) = channel::<String>(32);
 
@@ -166,6 +212,8 @@ impl<'a> Instance<'a> {
         command
             .current_dir(factorio_path)
             .args([
+                "--executable-path",
+                settings.executable_path.to_str().unwrap(),
                 "--start-server",
                 save_path.to_str().ok_or(ServerError::Utf8Error())?,
                 "--console-log",
@@ -179,6 +227,8 @@ impl<'a> Instance<'a> {
                 format!("{}:{}", settings.rcon_host, settings.rcon_port).as_str(),
                 "--rcon-password",
                 settings.rcon_pass.as_str(),
+                "--mod-directory",
+                factorio_path.join("mods").to_str().unwrap(),
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -211,6 +261,7 @@ impl<'a> Instance<'a> {
                 }
 
                 if line.ends_with("changing state from(CreatingGame) to(InGame)") {
+                    println!("State changed to Running");
                     status_sender.send_replace(Status::Running);
                 }
 

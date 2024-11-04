@@ -225,7 +225,6 @@ impl ModPortal {
     }
     
     pub async fn mod_short(&self, mod_name: impl AsRef<str>) -> Result<ShortModResult, ServerError> {
-        println!("https://mods.factorio.com/api/mods/{}", mod_name.as_ref());
         Ok(
             self.client.get(
                 format!("https://mods.factorio.com/api/mods/{}", mod_name.as_ref())

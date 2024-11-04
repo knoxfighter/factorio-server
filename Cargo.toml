@@ -7,7 +7,6 @@ edition = "2021"
 thiserror = "1.0.63"
 tokio = { version = "1.40.0", features = ["full"]}
 rand = "0.8.5"
-notify = "6.1.1"
 futures = "0.3.30"
 sysinfo = "0.32.0"
 rcon = { version = "0.6.0", features = ["rt-tokio"] }
