@@ -24,7 +24,7 @@ pub enum SortOrder {
 }
 
 #[derive(Default, Serialize, Deserialize)]
-pub enum Version {
+pub enum FactorioVersion {
     #[serde(rename = "0.13")]
     version_0_13,
     #[serde(rename = "0.14")]
@@ -51,7 +51,7 @@ pub struct ModListParameter {
     pub sort: Sort,
     pub sort_order: SortOrder,
     pub namelist: Vec<String>,
-    pub version: Version,
+    pub version: FactorioVersion,
 }
 impl Default for ModListParameter {
     fn default() -> ModListParameter {

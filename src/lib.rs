@@ -8,4 +8,4 @@ pub mod instance;
 pub mod manager;
 pub(crate) mod utilities;
 pub mod mod_portal;
-pub mod factorio_version;
+pub mod version;

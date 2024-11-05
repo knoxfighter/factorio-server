@@ -10,7 +10,7 @@ use scraper::Selector;
 use tokio::fs::{create_dir_all, File};
 use tokio::io::{AsyncWriteExt, BufReader};
 use tokio_util::io::StreamReader;
-use crate::factorio_version::FactorioVersion;
+use crate::version::Version;
 use crate::mod_portal::ModPortal;
 
 pub struct Cache {
@@ -36,7 +36,7 @@ impl Cache {
 
     pub(crate) async fn get_version(
         &self,
-        version: &FactorioVersion,
+        version: &Version,
     ) -> Result<PathBuf, ServerError> {
         let path = self.factorio_dir.join(version.to_string());
         if exists(&path)? {
@@ -59,7 +59,7 @@ impl Cache {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     async fn download_factorio(
         &self,
-        version: &FactorioVersion,
+        version: &Version,
         path: impl AsRef<Path>,
     ) -> Result<(), ServerError> {
         use async_zip::base::read::seek::ZipFileReader;
@@ -74,7 +74,7 @@ impl Cache {
         }
 
         let credentials = self.credentials.get_credentials()?;
-        let build = if version >= &FactorioVersion::from([2, 0, 0]) {
+        let build = if version >= &Version::from([2, 0, 0]) {
             "expansion"
         } else {
             "alpha"
@@ -148,7 +148,7 @@ impl Cache {
     #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
     async fn download_factorio(
         &self,
-        version: &FactorioVersion,
+        version: &Version,
         path: impl AsRef<Path>,
     ) -> Result<(), ServerError> {
         use async_compression::tokio::bufread::XzDecoder;
@@ -236,9 +236,9 @@ impl Cache {
         Ok(())
     }
     
-    pub(crate) async fn get_mod(&self, name: impl AsRef<str>, version: impl AsRef<str>) -> Result<PathBuf, ServerError> {
-        let path = self.mods_dir.join(name.as_ref()).join(version.as_ref());
-        let path = path.join(format!("{}_{}.zip", name.as_ref(), version.as_ref()));
+    pub(crate) async fn get_mod(&self, name: impl AsRef<str>, version: &Version) -> Result<PathBuf, ServerError> {
+        let path = self.mods_dir.join(name.as_ref()).join(version.to_string());
+        let path = path.join(format!("{}_{}.zip", name.as_ref(), version));
         
         if path.exists() {
             return Ok(path)
@@ -255,7 +255,7 @@ impl Cache {
             .ok_or(ServerError::DownloadError("no releases found".to_string()))?;
         let release = release
             .iter().find(|release| {
-                release.version == version.as_ref()
+                release.version == version.to_string()
             })
             .ok_or(ServerError::DownloadError("release not found".to_string()))?;
         
@@ -299,12 +299,12 @@ mod test {
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
         // cache.credentials.login("asdff45", "<pw>").await.unwrap();
         // cache.credentials.save().unwrap();
-        cache.get_version(&FactorioVersion::from([1, 1, 110])).await.unwrap();
+        cache.get_version(&Version::from([1, 1, 110])).await.unwrap();
 
         // let versions = cache.get_available_versions().await.unwrap();
         // println!("{:?}", versions);
 
-        cache.get_mod("Bottleneck", "0.11.7").await.unwrap();
+        cache.get_mod("Bottleneck", &Version::from([0, 11, 17])).await.unwrap();
         
         panic!("something, so log is shown");
     }
