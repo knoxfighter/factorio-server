@@ -49,28 +49,26 @@ impl Manager {
         .await
     }
 
-    pub(crate) async fn backup_logs(
+    pub(crate) async fn backup_files(
         &self,
-        factorio_path: impl AsRef<Path>,
-        name: String,
+        instance_name: impl AsRef<str>,
+        paths: Vec<impl AsRef<Path>>,
     ) -> Result<(), ServerError> {
-        let log_path = self
-            .data
-            .get_and_rotate_file(name.clone(), "factorio-current.log".into(), 9)
-            .await?;
-        rename(
-            factorio_path.as_ref().join("factorio-current.log"),
-            log_path,
-        )
-        .await?;
-
-        let console_log = self
-            .data
-            .get_and_rotate_file(name, "console.log".to_string(), 9)
-            .await?;
-        rename(factorio_path.as_ref().join("console.log"), console_log).await?;
+        for path in paths {
+            let path = path.as_ref();
+            if path.exists() {
+                if let Some(filename) = path.file_name() {
+                    let rotated_log = self.data.get_and_rotate_file(instance_name.as_ref(), filename.to_str().unwrap(), 9).await?;
+                    rename(path, &rotated_log).await?;
+                }
+            }
+        }
 
         Ok(())
+    }
+    
+    pub(crate) async fn load_backup_file(&self, instance_name: impl AsRef<str>, name: impl AsRef<str>) -> Result<PathBuf, ServerError> {
+        Ok(self.data.get_file(instance_name.as_ref(), name.as_ref()).await?)
     }
     
     pub(crate) async fn get_mod(&self, name: impl AsRef<str>, version: &Version) -> Result<PathBuf, ServerError> {
@@ -94,7 +92,7 @@ mod test {
         let manager =
             Manager::new("C:\\Data\\Development\\tmp\\factorio-server-root-windows").unwrap();
         let mut settings =
-            InstanceSettings::new("test3".to_string(), Version::from([1, 1, 110])).unwrap();
+            InstanceSettings::new("test4".to_string(), Version::from([1, 1, 110])).unwrap();
         settings.add_mod("AutoDeconstruct", Version::from([1, 0, 2]));
         settings.add_mod("RateCalculator", Version::from([3, 3, 0]));
         let instance = manager
@@ -103,7 +101,7 @@ mod test {
             .unwrap();
         let mut instance = instance.start().await.unwrap();
 
-        sleep(Duration::from_secs(5)).await;
+        sleep(Duration::from_secs(120)).await;
 
         instance.stop().await.unwrap();
     }

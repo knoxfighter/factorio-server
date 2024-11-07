@@ -8,7 +8,7 @@ use tokio::fs::{create_dir_all, File};
 pub(crate) struct Data {
     root_folder: PathBuf,
     saves_folder: PathBuf,
-    logs_folder: PathBuf,
+    files_folder: PathBuf,
 }
 
 impl Data {
@@ -16,7 +16,7 @@ impl Data {
         Self {
             root_folder: root_folder.as_ref().into(),
             saves_folder: root_folder.as_ref().join("saves"),
-            logs_folder: root_folder.as_ref().join("logs"),
+            files_folder: root_folder.as_ref().join("files"),
         }
     }
 
@@ -55,15 +55,15 @@ impl Data {
 
     pub(crate) async fn get_and_rotate_file(
         &self,
-        instance_name: String,
-        file_name: String,
+        instance_name: impl AsRef<str>,
+        file_name: impl AsRef<str>,
         amount: u8,
     ) -> io::Result<PathBuf> {
-        let instance_path = self.logs_folder.join(instance_name);
+        let instance_path = self.files_folder.join(instance_name.as_ref());
 
         create_dir_all(&instance_path).await?;
 
-        let file_path = instance_path.join(file_name);
+        let file_path = instance_path.join(file_name.as_ref());
         if file_path.exists() {
             // check if file is empty
             if get_file_size(File::open(&file_path).await?.metadata().await?) != 0 {
@@ -73,5 +73,11 @@ impl Data {
             }
         }
         Ok(file_path)
+    }
+
+    pub(crate) async fn get_file(&self, instance_name: impl AsRef<str>, file_name: impl AsRef<str>) -> io::Result<PathBuf> {
+        let instance_path = self.files_folder.join(instance_name.as_ref());
+        create_dir_all(&instance_path).await?;
+        Ok(instance_path.join(file_name.as_ref()))
     }
 }

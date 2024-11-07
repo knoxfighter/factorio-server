@@ -245,6 +245,17 @@ impl<'a> Instance<'a> {
         }
 
         build_mod_list_json(&settings, mods_dir.join("mod-list.json")).await?;
+        
+        // copy in mod settings
+        let settings_dat = manager.load_backup_file(name.as_ref(), "mod-settings.dat").await?;
+        if settings_dat.exists() {
+            tokio::fs::copy(settings_dat, mods_dir).await?;
+        } else {
+            let settings_json = manager.load_backup_file(name.as_ref(), "mod-settings.json").await?;
+            if settings_json.exists() {
+                tokio::fs::copy(settings_json, mods_dir).await?;
+            }
+        }
 
         Ok(
             Self {
@@ -460,7 +471,15 @@ impl<'a> RunningInstance<'a> {
 
     async fn cleanup(&self) -> Result<(), ServerError> {
         self.manager
-            .backup_logs(&self.path, self.name.clone())
+            .backup_files(
+                &self.name,
+                vec![
+                    self.path.join("factorio-current.log"),
+                    self.path.join("console.log"),
+                    self.path.join("mods").join("mod-settings.dat"),
+                    self.path.join("mods").join("mod-settings.json")
+                ]
+            )
             .await?;
         Ok(())
     }
