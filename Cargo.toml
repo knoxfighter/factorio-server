@@ -14,9 +14,9 @@ reqwest = { version = "0.12.7", features = ["rustls-tls", "stream", "json", "coo
 tokio-util = { version = "0.7.12", features = ["compat"] }
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "xz", "deflate"] }
 futures-lite = "2.3.0"
-sanitize-filename = "0.5.0"
 async-compression = { version = "0.4.13", features = ["tokio", "xz"] }
 tokio-tar = "0.3.1"
 serde = { version = "1.0.210", features = ["derive"] }
 serde_json = "1.0.128"
-scraper = "0.20.0"
+scraper = "0.21.0"
+dashmap = "6.1.0"

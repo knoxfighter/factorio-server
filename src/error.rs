@@ -35,5 +35,7 @@ pub enum ServerError {
     #[error("SerdeJsonError: {0}")]
     SerdeJsonError(#[from] serde_json::error::Error),
     #[error("Download Error: {0}")]
-    DownloadError(String)
+    DownloadError(String),
+    #[error("In-Flight Error")]
+    InFlightError,
 }

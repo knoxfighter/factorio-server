@@ -1,16 +1,16 @@
 use crate::error::ServerError;
 use crate::factorio_tracker::FactorioTracker;
-use crate::version::Version;
 use crate::manager::Manager;
 use crate::utilities::{get_random_port, symlink_file, symlink_folder};
+use crate::version::Version;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rcon::Connection;
+use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
-use serde::Serialize;
 use tokio::fs::{create_dir_all, remove_dir_all, File};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -212,7 +212,9 @@ impl<'a> Instance<'a> {
         let factorio_cache_path = factorio_cache_path.as_ref();
 
         // first thing: cleanup the folder we want to run in
-        remove_dir_all(&instance_path).await?;
+        if instance_path.exists() {
+            remove_dir_all(&instance_path).await?;
+        }
 
         let executable_path = instance_path.join(&settings.executable_path);
         let executable_parent = executable_path.parent().ok_or(ServerError::NotAllowed(
@@ -242,18 +244,19 @@ impl<'a> Instance<'a> {
                 .ok_or(ServerError::NotAllowed("mod has no name".to_string()))?;
             let mod_path_dst = mods_dir.join(file_name);
             symlink_file(mod_path_src, mod_path_dst)?;
+            // tokio::fs::copy(mod_path_src, mod_path_dst).await?;
         }
 
         build_mod_list_json(&settings, mods_dir.join("mod-list.json")).await?;
         
         // copy in mod settings
-        let settings_dat = manager.load_backup_file(name.as_ref(), "mod-settings.dat").await?;
-        if settings_dat.exists() {
-            tokio::fs::copy(settings_dat, mods_dir).await?;
+        let mod_settings_dat = manager.load_backup_file(name.as_ref(), "mod-settings.dat").await?;
+        if mod_settings_dat.exists() {
+            tokio::fs::copy(mod_settings_dat, mods_dir.join("mod-settings.dat")).await?;
         } else {
             let settings_json = manager.load_backup_file(name.as_ref(), "mod-settings.json").await?;
             if settings_json.exists() {
-                tokio::fs::copy(settings_json, mods_dir).await?;
+                tokio::fs::copy(settings_json, mods_dir.join("mod-settings.json")).await?;
             }
         }
 

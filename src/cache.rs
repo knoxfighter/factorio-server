@@ -1,17 +1,22 @@
-use std::collections::HashMap;
 use crate::credentials::CredentialManager;
-use crate::drop_guard::DropGuard;
 use crate::error::ServerError;
+use crate::mod_portal::ModPortal;
+use crate::version::Version;
+use dashmap::{DashMap, Entry};
 use futures::{StreamExt, TryStreamExt};
-use std::fs::{exists, remove_dir_all};
-use std::path::{Path, PathBuf};
 use reqwest::Client;
 use scraper::Selector;
+use std::collections::HashMap;
+use std::fs::remove_dir_all;
+use std::path::{Path, PathBuf};
 use tokio::fs::{create_dir_all, File};
 use tokio::io::{AsyncWriteExt, BufReader};
+use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::sync::broadcast;
+use tokio_util::either::Either;
 use tokio_util::io::StreamReader;
-use crate::version::Version;
-use crate::mod_portal::ModPortal;
+
+type InFlight = DashMap<PathBuf, Sender<()>>;
 
 pub struct Cache {
     root_path: PathBuf,
@@ -20,6 +25,19 @@ pub struct Cache {
     credentials: CredentialManager,
     mod_portal: ModPortal,
     client: Client,
+    in_flight: InFlight,
+}
+
+struct SenderGuard<'a> {
+    path: PathBuf,
+    in_flight: &'a InFlight,
+    sender: Sender<()>,
+}
+
+impl Drop for SenderGuard<'_> {
+    fn drop(&mut self) {
+        self.in_flight.remove(&self.path);
+    }
 }
 
 impl Cache {
@@ -31,29 +49,60 @@ impl Cache {
             root_path,
             mod_portal: ModPortal::new()?,
             client: Client::new(),
+            in_flight: DashMap::new(),
         })
     }
 
-    pub(crate) async fn get_version(
-        &self,
-        version: &Version,
-    ) -> Result<PathBuf, ServerError> {
+    /// Download factorio from the official website.
+    /// This function is save to be called multiple times, all futures will be fulfilled when the download is done.
+    /// 
+    /// On Windows it needs a valid login to download factorio.
+    /// Make sure to login first with the `crate::credentials::CredentialManager`.
+    /// 
+    /// # Arguments 
+    /// 
+    /// * `version`: The factorio version to download
+    /// 
+    /// returns: Result<PathBuf, ServerError> 
+    /// 
+    /// # Examples 
+    /// 
+    /// ```
+    /// 
+    /// ```
+    pub async fn get_factorio(&self, version: &Version) -> Result<PathBuf, ServerError> {
         let path = self.factorio_dir.join(version.to_string());
-        if exists(&path)? {
+        if path.exists() {
             return Ok(path);
         }
 
-        let drop_guard = DropGuard::new(|| {
-            remove_dir_all(&path).unwrap();
-        });
+        match self.check_inflight(path.clone()) {
+            Either::Left(mut receiver) => {
+                receiver.recv().await?;
+                if path.exists() {
+                    Ok(path)
+                } else {
+                    Err(ServerError::InFlightError)
+                }
+            }
+            Either::Right(sender_guard) => {
+                create_dir_all(&path).await?;
 
-        create_dir_all(&path).await?;
+                // TODO: maybe do this as drop_guard within download_mod
+                self.download_factorio(version, &path).await.map_err(|err| {
+                    let remove_err = remove_dir_all(&path);
+                    if remove_err.is_err() {
+                        remove_err.err().unwrap().into()
+                    } else {
+                        err
+                    }
+                })?;
 
-        self.download_factorio(version, &path).await?;
+                sender_guard.sender.send(()).ok();
 
-        drop_guard.disarm();
-
-        Ok(path)
+                Ok(path)
+            }
+        }
     }
 
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
@@ -80,15 +129,15 @@ impl Cache {
             "alpha"
         };
         let distro = "win64-manual";
-        let resp = self.client.get(format!(
-            "https://www.factorio.com/get-download/{}/{build}/{distro}?username={}&token={}",
-            version,
-            credentials.username,
-            credentials.token
-        ))
-        .send()
-        .await?
-        .error_for_status()?;
+        let resp = self
+            .client
+            .get(format!(
+                "https://www.factorio.com/get-download/{}/{build}/{distro}?username={}&token={}",
+                version, credentials.username, credentials.token
+            ))
+            .send()
+            .await?
+            .error_for_status()?;
         let stream = resp.bytes_stream();
         let stream = StreamReader::new(
             stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
@@ -156,13 +205,15 @@ impl Cache {
 
         let build = "headless";
         let distro = "linux64";
-        let resp = self.client.get(format!(
-            "https://www.factorio.com/get-download/{}/{build}/{distro}",
-            version
-        ))
-        .send()
-        .await?
-        .error_for_status()?;
+        let resp = self
+            .client
+            .get(format!(
+                "https://www.factorio.com/get-download/{}/{build}/{distro}",
+                version
+            ))
+            .send()
+            .await?
+            .error_for_status()?;
         let stream = resp.bytes_stream();
         let stream = StreamReader::new(
             stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
@@ -176,9 +227,12 @@ impl Cache {
         archive.unpack(&path).await?;
 
         let mut entries = tokio::fs::read_dir(&path).await?;
-        let entry = entries.next_entry().await?.ok_or(ServerError::DownloadError(
-            "missing subfolder after extracting tar".to_string(),
-        ))?;
+        let entry = entries
+            .next_entry()
+            .await?
+            .ok_or(ServerError::DownloadError(
+                "missing subfolder after extracting tar".to_string(),
+            ))?;
 
         let mut entries = tokio::fs::read_dir(entry.path()).await?;
         while let Some(entry) = entries.next_entry().await? {
@@ -199,7 +253,9 @@ impl Cache {
     }
 
     // return (available, downloaded)
-    pub async fn get_available_versions(&self) -> Result<HashMap<String, (bool, bool)>, ServerError> {
+    pub async fn get_available_versions(
+        &self,
+    ) -> Result<HashMap<String, (bool, bool)>, ServerError> {
         let mut versions = HashMap::new();
 
         let mut dir_reader = tokio::fs::read_dir(&self.factorio_dir).await?;
@@ -209,81 +265,163 @@ impl Cache {
             value.1 = true;
         }
 
-        let downloadable = self.client.get("https://www.factorio.com/download/archive/").send().await?.text().await?;
+        let downloadable = self
+            .client
+            .get("https://www.factorio.com/download/archive/")
+            .send()
+            .await?
+            .text()
+            .await?;
         let document = scraper::Html::parse_document(&downloadable);
         let selector = Selector::parse("a.slot-button-inline").unwrap();
         for elem in document.select(&selector) {
-            let link = elem.attr("href").ok_or(ServerError::DownloadError("no href present".to_string()))?;
+            let link = elem
+                .attr("href")
+                .ok_or(ServerError::DownloadError("no href present".to_string()))?;
 
-            let version = link.split("/").last().ok_or(ServerError::DownloadError("href link is wrongly formatted".to_string()))?;
+            let version = link.split("/").last().ok_or(ServerError::DownloadError(
+                "href link is wrongly formatted".to_string(),
+            ))?;
 
-            let value = versions.entry(version.to_string()).or_insert((false, false));
+            let value = versions
+                .entry(version.to_string())
+                .or_insert((false, false));
             value.0 = true;
         }
 
         Ok(versions)
     }
-    
+
     pub async fn delete_version(&self, version: impl AsRef<str>) -> Result<(), ServerError> {
         let version = version.as_ref();
-        
+
         let dir = self.factorio_dir.join(version);
         if !dir.exists() {
-            return Err(ServerError::NotAllowed("version doesn't exist".to_string()))
+            return Err(ServerError::NotAllowed("version doesn't exist".to_string()));
         }
         tokio::fs::remove_dir_all(&dir).await?;
-        
+
         Ok(())
     }
-    
-    pub(crate) async fn get_mod(&self, name: impl AsRef<str>, version: &Version) -> Result<PathBuf, ServerError> {
+
+    fn check_inflight(&self, path: PathBuf) -> Either<Receiver<()>, SenderGuard> {
+        let entry = self.in_flight.entry(path.clone());
+
+        match entry {
+            // TODO: If this causes issues, use a Weak<Mutex<Sender<()>>> instead
+            Entry::Occupied(mut elem) => {
+                let e = elem.get_mut();
+                Either::Left(e.subscribe())
+            }
+            Entry::Vacant(elem) => {
+                let sender = broadcast::channel(1).0;
+                elem.insert(sender.clone());
+                Either::Right(SenderGuard {
+                    path,
+                    in_flight: &self.in_flight,
+                    sender,
+                })
+            }
+        }
+    }
+
+    /// Download a mod from the official mod portal.
+    /// This function is save to be called multiple times, all futures will be fulfilled when the download is done.
+    /// 
+    /// Make sure to login first with the `crate::credentials::CredentialManager`.
+    /// 
+    /// # Arguments 
+    /// 
+    /// * `name`: 
+    /// * `version`: 
+    /// 
+    /// returns: Result<PathBuf, ServerError> 
+    /// 
+    /// # Examples 
+    /// 
+    /// ```
+    /// 
+    /// ```
+    pub async fn get_mod(
+        &self,
+        name: impl AsRef<str>,
+        version: &Version,
+    ) -> Result<PathBuf, ServerError> {
         let path = self.mods_dir.join(name.as_ref()).join(version.to_string());
         let path = path.join(format!("{}_{}.zip", name.as_ref(), version));
-        
+
         if path.exists() {
-            return Ok(path)
-        }
-    
-        if !self.credentials.has_token() {
-            return Err(ServerError::NotAllowed("credentials required".to_string()))
+            return Ok(path);
         }
 
-        let result = self.mod_portal.mod_short(name.as_ref()).await?;
-        let release = result.
-            result.
-            releases
-            .ok_or(ServerError::DownloadError("no releases found".to_string()))?;
-        let release = release
-            .iter().find(|release| {
-                release.version == version.to_string()
-            })
-            .ok_or(ServerError::DownloadError("release not found".to_string()))?;
-        
-        
-        self.download_mod(&path, &release.download_url).await?;
-        
-        Ok(path)
+        match self.check_inflight(path.clone()) {
+            Either::Left(mut receiver) => {
+                receiver.recv().await?;
+                if path.exists() {
+                    Ok(path)
+                } else {
+                    Err(ServerError::InFlightError)
+                }
+            }
+            Either::Right(sender_guard) => {
+                if !self.credentials.has_token() {
+                    return Err(ServerError::NotAllowed("credentials required".to_string()));
+                }
+
+                let result = self.mod_portal.mod_short(name.as_ref()).await?;
+                let release = result
+                    .result
+                    .releases
+                    .ok_or(ServerError::DownloadError("no releases found".to_string()))?;
+                let version_str = version.to_string();
+                let release = release
+                    .iter()
+                    .find(|release| release.version == version_str)
+                    .ok_or(ServerError::DownloadError("release not found".to_string()))?;
+
+                // TODO: maybe do this as drop_guard within download_mod
+                self.download_mod(&path, &release.download_url).await.map_err(|err| {
+                    let remove_err = remove_dir_all(&path);
+                    if remove_err.is_err() {
+                        remove_err.err().unwrap().into()
+                    } else {
+                        err
+                    }
+                })?;
+
+                sender_guard.sender.send(()).ok();
+
+                Ok(path)
+            }
+        }
     }
-    
-    async fn download_mod(&self, path: impl AsRef<Path>, url: impl AsRef<str>) -> Result<(), ServerError> {
-        tokio::fs::create_dir_all(path.as_ref().parent().ok_or(ServerError::NotAllowed("mod_file_path has no parent".to_string()))?).await?;
-        
+
+    async fn download_mod(
+        &self,
+        path: impl AsRef<Path>,
+        url: impl AsRef<str>,
+    ) -> Result<(), ServerError> {
+        tokio::fs::create_dir_all(path.as_ref().parent().ok_or(ServerError::NotAllowed(
+            "mod_file_path has no parent".to_string(),
+        ))?)
+        .await?;
+
         let creds = self.credentials.get_credentials()?;
-        let url = format!("https://mods.factorio.com/{}?username={}&token={}", url.as_ref(), creds.username, creds.token);
-        
-        let res = self
-            .client
-            .get(url)
-            .send()
-            .await?
-            .error_for_status()?;
-        
+        let url = format!(
+            "https://mods.factorio.com/{}?username={}&token={}",
+            url.as_ref(),
+            creds.username,
+            creds.token
+        );
+
+        let res = self.client.get(url).send().await?.error_for_status()?;
+
         let mut file = File::create(path.as_ref()).await?;
         let mut content = res.bytes_stream();
         while let Some(chunk) = content.next().await {
             file.write_all(&chunk?).await?;
         }
-        
+
         Ok(())
     }
 }
@@ -299,13 +437,19 @@ mod test {
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
         // cache.credentials.login("asdff45", "<pw>").await.unwrap();
         // cache.credentials.save().unwrap();
-        cache.get_version(&Version::from([1, 1, 110])).await.unwrap();
+        cache
+            .get_factorio(&Version::from([1, 1, 110]))
+            .await
+            .unwrap();
 
         // let versions = cache.get_available_versions().await.unwrap();
         // println!("{:?}", versions);
 
-        cache.get_mod("Bottleneck", &Version::from([0, 11, 17])).await.unwrap();
-        
+        cache
+            .get_mod("Bottleneck", &Version::from([0, 11, 17]))
+            .await
+            .unwrap();
+
         panic!("something, so log is shown");
     }
 }
