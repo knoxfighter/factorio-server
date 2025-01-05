@@ -6,6 +6,8 @@ mod error;
 mod factorio_tracker;
 pub mod instance;
 pub mod manager;
-pub(crate) mod utilities;
 pub mod mod_portal;
+pub(crate) mod utilities;
 pub mod version;
+
+type Progress = prognest::Progress<u64, u64>;

@@ -3,6 +3,7 @@ use crate::data::Data;
 use crate::error::ServerError;
 use crate::instance::{Instance, InstanceSettings};
 use crate::version::Version;
+use crate::Progress;
 use std::path::{Path, PathBuf};
 use tokio::fs::rename;
 
@@ -30,13 +31,18 @@ impl Manager {
         &self,
         name: String,
         settings: InstanceSettings,
+        progress: &mut Progress,
     ) -> Result<Instance, ServerError> {
-        // TODO: check if instance is already there
+        // TODO: check if instance is still running
 
-        // prepare instance
         let instance_path = self.instances_path.join(&name);
 
-        let factorio_cache_path = self.cache.get_factorio(&settings.factorio_version).await?;
+        let mut sub_prog = progress.allocate_fraction((settings.mods.len() + 1) as u64);
+        let factorio_cache_path = self
+            .cache
+            .get_factorio(&settings.factorio_version, &mut sub_prog)
+            .await?;
+
         let saves_path = self.data.get_saves_folder(&settings.save)?;
 
         Instance::prepare(
@@ -46,6 +52,7 @@ impl Manager {
             &instance_path,
             &factorio_cache_path,
             &saves_path,
+            progress,
         )
         .await
     }
@@ -59,7 +66,10 @@ impl Manager {
             let path = path.as_ref();
             if path.exists() {
                 if let Some(filename) = path.file_name() {
-                    let rotated_log = self.data.get_and_rotate_file(instance_name.as_ref(), filename.to_str().unwrap(), 9).await?;
+                    let rotated_log = self
+                        .data
+                        .get_and_rotate_file(instance_name.as_ref(), filename.to_str().unwrap(), 9)
+                        .await?;
                     rename(path, &rotated_log).await?;
                 }
             }
@@ -67,17 +77,33 @@ impl Manager {
 
         Ok(())
     }
-    
-    pub(crate) async fn load_backup_file(&self, instance_name: impl AsRef<str>, name: impl AsRef<str>) -> Result<PathBuf, ServerError> {
-        Ok(self.data.get_file(instance_name.as_ref(), name.as_ref()).await?)
+
+    pub(crate) async fn load_backup_file(
+        &self,
+        instance_name: impl AsRef<str>,
+        name: impl AsRef<str>,
+    ) -> Result<PathBuf, ServerError> {
+        Ok(self
+            .data
+            .get_file(instance_name.as_ref(), name.as_ref())
+            .await?)
     }
 
-    pub async fn get_mod(&self, name: impl AsRef<str>, version: &Version) -> Result<PathBuf, ServerError> {
-        self.cache.get_mod(name, version).await
+    pub async fn get_mod(
+        &self,
+        name: impl AsRef<str>,
+        version: &Version,
+        prog: &mut Progress,
+    ) -> Result<PathBuf, ServerError> {
+        self.cache.get_mod(name, version, prog).await
     }
 
-    pub async fn get_factorio(&self, version: &Version) -> Result<PathBuf, ServerError> {
-        self.cache.get_factorio(version).await
+    pub async fn get_factorio(
+        &self,
+        version: &Version,
+        progress: &mut Progress,
+    ) -> Result<PathBuf, ServerError> {
+        self.cache.get_factorio(version, progress).await
     }
 }
 
@@ -86,6 +112,7 @@ mod test {
     use crate::instance::InstanceSettings;
     use crate::manager::Manager;
     use crate::version::Version;
+    use prognest::Progress;
     use std::time::Duration;
     use tokio::time::sleep;
 
@@ -96,12 +123,16 @@ mod test {
         #[cfg(target_os = "windows")]
         let manager =
             Manager::new("C:\\Data\\Development\\tmp\\factorio-server-root-windows").unwrap();
+
         let mut settings =
             InstanceSettings::new("test4".to_string(), Version::from([1, 1, 110])).unwrap();
         settings.add_mod("AutoDeconstruct", Version::from([0, 4, 4]));
         settings.add_mod("RateCalculator", Version::from([3, 2, 7])); // doesn't load, needs flib
+
+        let mut progress = Progress::new(10000);
+
         let instance = manager
-            .prepare_instance("test_1.1.110".to_string(), settings)
+            .prepare_instance("test_1.1.110".to_string(), settings, &mut progress)
             .await
             .unwrap();
         let mut instance = instance.start().await.unwrap();

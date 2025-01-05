@@ -1,6 +1,5 @@
 use crate::credentials::CredentialsFailure;
 use crate::instance::Status;
-use async_zip::error::ZipError;
 use std::num::ParseIntError;
 use thiserror::Error;
 use tokio::sync::broadcast::error::{RecvError, SendError};
@@ -29,7 +28,7 @@ pub enum ServerError {
     #[error("ReqwestError: {0}")]
     ReqwestError(#[from] reqwest::Error),
     #[error("ZipError: {0}")]
-    ZipError(#[from] ZipError),
+    ZipError(#[from] rc_zip_tokio::rc_zip::error::Error),
     #[error("CredentialsFailure: {0}")]
     CredentialsFailure(#[from] CredentialsFailure),
     #[error("SerdeJsonError: {0}")]

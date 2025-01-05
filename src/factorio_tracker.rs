@@ -31,7 +31,7 @@ impl FactorioTracker {
         let t = tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_secs(1));
             // let mut interval = tokio::time::interval(Duration::from_millis(10));
-            
+
             'outer: loop {
                 'waiter: loop {
                     // check if file already exists and if not, we don't need to wait for a smaller filesize.

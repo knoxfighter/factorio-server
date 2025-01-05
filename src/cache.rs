@@ -2,19 +2,21 @@ use crate::credentials::CredentialManager;
 use crate::error::ServerError;
 use crate::mod_portal::ModPortal;
 use crate::version::Version;
+use crate::Progress;
 use dashmap::{DashMap, Entry};
-use futures::{StreamExt, TryStreamExt};
+use futures_lite::StreamExt;
+use rc_zip_tokio::ReadZip;
 use reqwest::Client;
 use scraper::Selector;
 use std::collections::HashMap;
 use std::fs::remove_dir_all;
 use std::path::{Path, PathBuf};
 use tokio::fs::{create_dir_all, File};
-use tokio::io::{AsyncWriteExt, BufReader};
-use tokio::sync::broadcast::{Receiver, Sender};
+use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
+use tokio::sync::broadcast::{Receiver, Sender};
 use tokio_util::either::Either;
-use tokio_util::io::StreamReader;
+use tokio_util::io::InspectReader;
 
 type InFlight = DashMap<PathBuf, Sender<()>>;
 
@@ -55,22 +57,26 @@ impl Cache {
 
     /// Download factorio from the official website.
     /// This function is save to be called multiple times, all futures will be fulfilled when the download is done.
-    /// 
+    ///
     /// On Windows it needs a valid login to download factorio.
     /// Make sure to login first with the `crate::credentials::CredentialManager`.
-    /// 
-    /// # Arguments 
-    /// 
+    ///
+    /// # Arguments
+    ///
     /// * `version`: The factorio version to download
-    /// 
-    /// returns: Result<PathBuf, ServerError> 
-    /// 
-    /// # Examples 
-    /// 
+    ///
+    /// returns: Result<PathBuf, ServerError>
+    ///
+    /// # Examples
+    ///
     /// ```
-    /// 
+    ///
     /// ```
-    pub async fn get_factorio(&self, version: &Version) -> Result<PathBuf, ServerError> {
+    pub async fn get_factorio(
+        &self,
+        version: &Version,
+        progress: &mut Progress,
+    ) -> Result<PathBuf, ServerError> {
         let path = self.factorio_dir.join(version.to_string());
         if path.exists() {
             return Ok(path);
@@ -89,14 +95,16 @@ impl Cache {
                 create_dir_all(&path).await?;
 
                 // TODO: maybe do this as drop_guard within download_mod
-                self.download_factorio(version, &path).await.map_err(|err| {
-                    let remove_err = remove_dir_all(&path);
-                    if remove_err.is_err() {
-                        remove_err.err().unwrap().into()
-                    } else {
-                        err
-                    }
-                })?;
+                self.download_factorio(version, &path, progress)
+                    .await
+                    .map_err(|err| {
+                        let remove_err = remove_dir_all(&path);
+                        if remove_err.is_err() {
+                            remove_err.err().unwrap().into()
+                        } else {
+                            err
+                        }
+                    })?;
 
                 sender_guard.sender.send(()).ok();
 
@@ -110,11 +118,16 @@ impl Cache {
         &self,
         version: &Version,
         path: impl AsRef<Path>,
+        progress: &mut Progress,
     ) -> Result<(), ServerError> {
-        use async_zip::base::read::seek::ZipFileReader;
-        use std::io::Cursor;
+        use rc_zip_tokio::rc_zip::parse::Mode;
         use tokio::fs::OpenOptions;
-        use tokio_util::compat::TokioAsyncWriteCompatExt;
+
+        let mut download_progress = progress.allocate_fraction(2);
+
+        ///////////////////////
+        // Download Factorio //
+        ///////////////////////
 
         if !self.credentials.has_token() {
             return Err(ServerError::NotAllowed(
@@ -138,56 +151,91 @@ impl Cache {
             .send()
             .await?
             .error_for_status()?;
-        let stream = resp.bytes_stream();
-        let stream = StreamReader::new(
-            stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
-        );
-        let mut stream = BufReader::new(stream);
 
-        let mut buffer = Vec::new();
+        let download_size = resp.content_length();
+        let mut buffer = if let Some(size) = download_size {
+            download_progress.set_internal(size);
+            Vec::with_capacity(size as usize)
+        } else {
+            download_progress.set_internal(1);
+            Vec::new()
+        };
 
-        tokio::io::copy(&mut stream, &mut buffer).await?;
+        let mut stream = resp.bytes_stream();
 
-        let cursor = Cursor::new(buffer);
+        // alternative stream only
+        // let mut stream = stream.map_err(std::io::Error::other);
+        // let stream = stream.inspect(|data| {
+        //     if let Ok(data) = data {
+        //         if download_size.is_some() {
+        //             download_progress.advance(data.len() as u64);
+        //         }
+        //     }
+        // });
+        // let mut stream = StreamReader::new(stream);
+        //
+        // tokio::io::copy(&mut stream, &mut buffer).await?;
 
-        let mut reader = ZipFileReader::with_tokio(cursor).await?;
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk?;
+            buffer.extend_from_slice(&chunk);
 
-        for index in 0..reader.file().entries().len() {
-            let entry = reader.file().entries().get(index).unwrap();
+            if download_size.is_some() {
+                download_progress.advance(chunk.len() as u64);
+            }
+        }
 
-            let filepath: PathBuf = entry.filename().as_str()?.into();
-            // remove first element from path in zip, it is `Factorio_<version>` and uninteresting
-            let filepath: PathBuf = filepath.components().skip(1).collect();
+        if download_size.is_none() {
+            download_progress.advance(1);
+        }
 
-            let path = path.as_ref().join(filepath);
-            // If the filename of the entry ends with '/', it is treated as a directory.
-            // This is implemented by previous versions of this crate and the Python Standard Library.
-            // https://docs.rs/async_zip/0.0.8/src/async_zip/read/mod.rs.html#63-65
-            // https://github.com/python/cpython/blob/820ef62833bd2d84a141adedd9a05998595d6b6d/Lib/zipfile.py#L528
-            let entry_is_dir = entry.dir()?;
+        /////////////////
+        // extract zip //
+        /////////////////
+        let extract_progress: Progress = progress.allocate_fraction(2);
 
-            let mut entry_reader = reader.reader_without_entry(index).await?;
+        let reader = buffer.read_zip().await?;
 
-            if entry_is_dir {
+        let entries_count = reader.entries().count() as u64;
+        for entry in reader.entries() {
+            let filename = entry.sanitized_name().ok_or_else(|| {
+                ServerError::DownloadError("invalid filename in factorio zip-file".into())
+            })?;
+            let out_path = path.as_ref().join(filename);
+
+            let mut entry_progress = extract_progress.allocate_fraction(entries_count);
+
+            if entry.mode.has(Mode::DIR) {
                 // The directory may have been created if iteration is out of order.
-                if !path.exists() {
-                    create_dir_all(&path).await?;
+                if !out_path.exists() {
+                    create_dir_all(&out_path).await?;
                 }
+                entry_progress.set_internal(1);
+                entry_progress.advance(1);
             } else {
                 // Creates parent directories. They may not exist if iteration is out of order
                 // or the archive does not contain directory entries.
-                let parent = path.parent().ok_or(ServerError::DownloadError(
+                let parent = out_path.parent().ok_or(ServerError::DownloadError(
                     "This file has no parent".to_string(),
                 ))?;
                 if !parent.is_dir() {
                     create_dir_all(parent).await?;
                 }
-                let writer = OpenOptions::new()
+                let mut writer = OpenOptions::new()
                     .write(true)
                     .create_new(true)
-                    .open(&path)
+                    .open(&out_path)
                     .await?;
-                futures_lite::io::copy(&mut entry_reader, &mut writer.compat_write()).await?;
+
+                entry_progress.set_internal(entry.uncompressed_size);
+
+                let entry_reader = entry.reader();
+
+                let mut entry_reader = InspectReader::new(entry_reader, |data| {
+                    entry_progress.advance(data.len() as u64)
+                });
+
+                tokio::io::copy(&mut entry_reader, &mut writer).await?;
             }
         }
 
@@ -199,9 +247,13 @@ impl Cache {
         &self,
         version: &Version,
         path: impl AsRef<Path>,
+        progress: &mut Progress,
     ) -> Result<(), ServerError> {
         use async_compression::tokio::bufread::XzDecoder;
+        use futures::TryStreamExt;
+        use tokio::io::BufReader;
         use tokio_tar::Archive;
+        use tokio_util::io::StreamReader;
 
         let build = "headless";
         let distro = "linux64";
@@ -214,7 +266,21 @@ impl Cache {
             .send()
             .await?
             .error_for_status()?;
+
+        let size = resp.content_length();
+        if let Some(size) = size {
+            progress.set_internal(size);
+        } else {
+            progress.set_internal(1);
+        }
+
         let stream = resp.bytes_stream();
+        let stream = stream.inspect(|e| {
+            if size.is_some() {
+                let len = if let Ok(e) = e { e.len() as u64 } else { 0 };
+                progress.advance(len);
+            }
+        });
         let stream = StreamReader::new(
             stream.map_err(|err| std::io::Error::new(std::io::ErrorKind::Other, err)),
         );
@@ -248,6 +314,10 @@ impl Cache {
             tokio::fs::rename(&sub_path, &dest_path).await?;
         }
         tokio::fs::remove_dir(&entry.path()).await?;
+
+        if size.is_none() {
+            progress.advance(1);
+        }
 
         Ok(())
     }
@@ -327,25 +397,26 @@ impl Cache {
 
     /// Download a mod from the official mod portal.
     /// This function is save to be called multiple times, all futures will be fulfilled when the download is done.
-    /// 
+    ///
     /// Make sure to login first with the `crate::credentials::CredentialManager`.
-    /// 
-    /// # Arguments 
-    /// 
-    /// * `name`: 
-    /// * `version`: 
-    /// 
-    /// returns: Result<PathBuf, ServerError> 
-    /// 
-    /// # Examples 
-    /// 
+    ///
+    /// # Arguments
+    ///
+    /// * `name`:
+    /// * `version`:
+    ///
+    /// returns: Result<PathBuf, ServerError>
+    ///
+    /// # Examples
+    ///
     /// ```
-    /// 
+    ///
     /// ```
     pub async fn get_mod(
         &self,
         name: impl AsRef<str>,
         version: &Version,
+        progress: &mut Progress,
     ) -> Result<PathBuf, ServerError> {
         let path = self.mods_dir.join(name.as_ref()).join(version.to_string());
         let path = path.join(format!("{}_{}.zip", name.as_ref(), version));
@@ -380,14 +451,16 @@ impl Cache {
                     .ok_or(ServerError::DownloadError("release not found".to_string()))?;
 
                 // TODO: maybe do this as drop_guard within download_mod
-                self.download_mod(&path, &release.download_url).await.map_err(|err| {
-                    let remove_err = remove_dir_all(&path);
-                    if remove_err.is_err() {
-                        remove_err.err().unwrap().into()
-                    } else {
-                        err
-                    }
-                })?;
+                self.download_mod(&path, &release.download_url, progress)
+                    .await
+                    .map_err(|err| {
+                        let remove_err = remove_dir_all(&path);
+                        if remove_err.is_err() {
+                            remove_err.err().unwrap().into()
+                        } else {
+                            err
+                        }
+                    })?;
 
                 sender_guard.sender.send(()).ok();
 
@@ -400,6 +473,7 @@ impl Cache {
         &self,
         path: impl AsRef<Path>,
         url: impl AsRef<str>,
+        progress: &mut Progress,
     ) -> Result<(), ServerError> {
         tokio::fs::create_dir_all(path.as_ref().parent().ok_or(ServerError::NotAllowed(
             "mod_file_path has no parent".to_string(),
@@ -416,10 +490,26 @@ impl Cache {
 
         let res = self.client.get(url).send().await?.error_for_status()?;
 
+        let size = res.content_length();
+
+        if let Some(size) = size {
+            progress.set_internal(size);
+        } else {
+            progress.set_internal(1);
+        }
+
         let mut file = File::create(path.as_ref()).await?;
         let mut content = res.bytes_stream();
         while let Some(chunk) = content.next().await {
-            file.write_all(&chunk?).await?;
+            let chunk = chunk?;
+            file.write_all(&chunk).await?;
+            if size.is_some() {
+                progress.advance(chunk.len() as u64);
+            }
+        }
+
+        if size.is_none() {
+            progress.advance(1);
         }
 
         Ok(())
@@ -437,16 +527,21 @@ mod test {
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
         // cache.credentials.login("asdff45", "<pw>").await.unwrap();
         // cache.credentials.save().unwrap();
+
+        let mut progress = Progress::new(10000);
+
         cache
-            .get_factorio(&Version::from([1, 1, 110]))
+            .get_factorio(&Version::from([1, 1, 110]), &mut progress)
             .await
             .unwrap();
 
         // let versions = cache.get_available_versions().await.unwrap();
         // println!("{:?}", versions);
 
+        let mut progress = Progress::new(10000);
+
         cache
-            .get_mod("Bottleneck", &Version::from([0, 11, 17]))
+            .get_mod("Bottleneck", &Version::from([0, 11, 17]), &mut progress)
             .await
             .unwrap();
 

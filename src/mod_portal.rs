@@ -199,7 +199,10 @@ impl ModPortal {
     // sort_order	{enum, one of asc or desc}
     // namelist	{array of strings}
     // version	{enum, one of 0.13, 0.14, 0.15, 0.16, 0.17, 0.18, 1.0 or 1.1}
-    pub async fn mod_list(&self, parameter: ModListParameter) -> Result<ModListResponse, ServerError> {
+    pub async fn mod_list(
+        &self,
+        parameter: ModListParameter,
+    ) -> Result<ModListResponse, ServerError> {
         let mut request = self
             .client
             .request(Method::GET, "https://mods.factorio.com/api/mods");
@@ -211,43 +214,47 @@ impl ModPortal {
             .query(&[("page", parameter.page)])
             .query(&[("sort", parameter.sort)])
             .query(&[("sort_order", parameter.sort_order)])
-            .query(&[("version", parameter.version)])
-            ;
+            .query(&[("version", parameter.version)]);
         if parameter.page_size == u32::MAX {
             request = request.query(&[("page_size", "max")]);
         } else {
             request = request.query(&[("page_size", parameter.page_size)]);
         }
         let response = request.send().await?.error_for_status()?;
-        let response: ModListResponse =  response.json().await?;
+        let response: ModListResponse = response.json().await?;
 
         Ok(response)
     }
-    
-    pub async fn mod_short(&self, mod_name: impl AsRef<str>) -> Result<ShortModResult, ServerError> {
-        Ok(
-            self.client.get(
-                format!("https://mods.factorio.com/api/mods/{}", mod_name.as_ref())
-            )
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?
-        )
+
+    pub async fn mod_short(
+        &self,
+        mod_name: impl AsRef<str>,
+    ) -> Result<ShortModResult, ServerError> {
+        Ok(self
+            .client
+            .get(format!(
+                "https://mods.factorio.com/api/mods/{}",
+                mod_name.as_ref()
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
-    
+
     pub async fn mod_full(&self, mod_name: impl AsRef<str>) -> Result<FullModResult, ServerError> {
-        Ok(
-            self.client.get(
-                format!("https://mods.factorio.com/api/mods/{}", mod_name.as_ref())
-            )
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?
-        )
+        Ok(self
+            .client
+            .get(format!(
+                "https://mods.factorio.com/api/mods/{}",
+                mod_name.as_ref()
+            ))
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?)
     }
 }
 

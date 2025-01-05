@@ -75,7 +75,11 @@ impl Data {
         Ok(file_path)
     }
 
-    pub(crate) async fn get_file(&self, instance_name: impl AsRef<str>, file_name: impl AsRef<str>) -> io::Result<PathBuf> {
+    pub(crate) async fn get_file(
+        &self,
+        instance_name: impl AsRef<str>,
+        file_name: impl AsRef<str>,
+    ) -> io::Result<PathBuf> {
         let instance_path = self.files_folder.join(instance_name.as_ref());
         create_dir_all(&instance_path).await?;
         Ok(instance_path.join(file_name.as_ref()))

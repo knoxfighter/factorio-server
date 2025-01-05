@@ -3,6 +3,7 @@ use crate::factorio_tracker::FactorioTracker;
 use crate::manager::Manager;
 use crate::utilities::{get_random_port, symlink_file, symlink_folder};
 use crate::version::Version;
+use crate::Progress;
 use rand::distributions::Alphanumeric;
 use rand::Rng;
 use rcon::Connection;
@@ -48,7 +49,7 @@ pub struct RunningInstance<'a> {
     name: String,
 
     manager: &'a Manager,
-    
+
     process: Child,
     status: Sender<Status>,
     tracker: FactorioTracker,
@@ -73,8 +74,8 @@ impl Default for BaseMods {
 }
 
 pub struct Mod {
-    name: String, 
-    version: Version
+    name: String,
+    version: Version,
 }
 
 pub struct InstanceSettings {
@@ -178,11 +179,10 @@ impl InstanceSettings {
     }
 
     pub fn add_mod(&mut self, name: impl AsRef<str>, version: Version) -> &mut Self {
-        self.mods
-            .push(Mod {
-                name: name.as_ref().to_string(), 
-                version
-            });
+        self.mods.push(Mod {
+            name: name.as_ref().to_string(),
+            version,
+        });
         self
     }
 
@@ -207,11 +207,13 @@ impl<'a> Instance<'a> {
         instance_path: impl AsRef<Path>,
         factorio_cache_path: impl AsRef<Path>,
         saves_path: impl AsRef<Path>,
+        prog: &mut Progress,
     ) -> Result<Self, ServerError> {
         let instance_path = instance_path.as_ref();
         let factorio_cache_path = factorio_cache_path.as_ref();
 
-        // first thing: cleanup the folder we want to run in
+        // first thing: cleanup the folder we want to run in.
+        // It could still exist from previous runs
         if instance_path.exists() {
             remove_dir_all(&instance_path).await?;
         }
@@ -238,44 +240,51 @@ impl<'a> Instance<'a> {
         create_dir_all(&mods_dir).await?;
 
         for mod_ in &settings.mods {
-            let mod_path_src = manager.get_mod(&mod_.name, &mod_.version).await?;
+            let mut sub_prog = prog.allocate_fraction(settings.mods.len() as u64);
+
+            let mod_path_src = manager
+                .get_mod(&mod_.name, &mod_.version, &mut sub_prog)
+                .await?;
+
             let file_name = mod_path_src
                 .file_name()
                 .ok_or(ServerError::NotAllowed("mod has no name".to_string()))?;
+
             let mod_path_dst = mods_dir.join(file_name);
             symlink_file(mod_path_src, mod_path_dst)?;
             // tokio::fs::copy(mod_path_src, mod_path_dst).await?;
         }
 
         build_mod_list_json(&settings, mods_dir.join("mod-list.json")).await?;
-        
+
         // copy in mod settings
-        let mod_settings_dat = manager.load_backup_file(name.as_ref(), "mod-settings.dat").await?;
+        let mod_settings_dat = manager
+            .load_backup_file(name.as_ref(), "mod-settings.dat")
+            .await?;
         if mod_settings_dat.exists() {
             tokio::fs::copy(mod_settings_dat, mods_dir.join("mod-settings.dat")).await?;
         } else {
-            let settings_json = manager.load_backup_file(name.as_ref(), "mod-settings.json").await?;
+            let settings_json = manager
+                .load_backup_file(name.as_ref(), "mod-settings.json")
+                .await?;
             if settings_json.exists() {
                 tokio::fs::copy(settings_json, mods_dir.join("mod-settings.json")).await?;
             }
         }
 
-        Ok(
-            Self {
-                settings,
-                path: instance_path.into(),
-                name: name.as_ref().to_string(),
-                manager,
-            }
-        )
+        Ok(Self {
+            settings,
+            path: instance_path.into(),
+            name: name.as_ref().to_string(),
+            manager,
+        })
     }
 
-    pub async fn start(
-        mut self,
-    ) -> Result<RunningInstance<'a>, ServerError> {
+    pub async fn start(mut self) -> Result<RunningInstance<'a>, ServerError> {
         let exec_path = self.path.join(&self.settings.executable_path);
 
-        let save_path = self.path
+        let save_path = self
+            .path
             .join(&self.settings.saves_path)
             .join(&self.settings.save)
             .with_extension("zip");
@@ -480,8 +489,8 @@ impl<'a> RunningInstance<'a> {
                     self.path.join("factorio-current.log"),
                     self.path.join("console.log"),
                     self.path.join("mods").join("mod-settings.dat"),
-                    self.path.join("mods").join("mod-settings.json")
-                ]
+                    self.path.join("mods").join("mod-settings.json"),
+                ],
             )
             .await?;
         Ok(())
@@ -498,7 +507,10 @@ struct ModList {
     mods: Vec<ModListMod>,
 }
 
-async fn build_mod_list_json(settings: &InstanceSettings, out_path: impl AsRef<Path>)-> Result<(), ServerError> {
+async fn build_mod_list_json(
+    settings: &InstanceSettings,
+    out_path: impl AsRef<Path>,
+) -> Result<(), ServerError> {
     let mut mod_list = ModList { mods: vec![] };
     mod_list.mods.push(ModListMod {
         name: "base".to_string(),
@@ -528,7 +540,7 @@ async fn build_mod_list_json(settings: &InstanceSettings, out_path: impl AsRef<P
     let mut mod_list_json_file = File::create(out_path).await?;
     mod_list_json_file.write_all(json.as_bytes()).await?;
     mod_list_json_file.flush().await?;
-    
+
     Ok(())
 }
 
