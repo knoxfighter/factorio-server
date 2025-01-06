@@ -33,9 +33,9 @@ impl Manager {
         settings: InstanceSettings,
         progress: &mut Progress,
     ) -> Result<Instance, ServerError> {
-        // TODO: check if instance is still running
-
         let instance_path = self.instances_path.join(&name);
+
+        Instance::check_running(&instance_path).await?;
 
         let mut sub_prog = progress.allocate_fraction((settings.mods.len() + 1) as u64);
         let factorio_cache_path = self

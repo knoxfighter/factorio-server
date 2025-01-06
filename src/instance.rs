@@ -12,6 +12,7 @@ use std::net::{IpAddr, Ipv4Addr};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
+use sysinfo::{Pid, System};
 use tokio::fs::{create_dir_all, remove_dir_all, File};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
@@ -278,6 +279,30 @@ impl<'a> Instance<'a> {
             name: name.as_ref().to_string(),
             manager,
         })
+    }
+
+    pub(crate) async fn check_running(instance_path: impl AsRef<Path>) -> Result<(), ServerError> {
+        let instance_path = instance_path.as_ref();
+
+        if !instance_path.exists() {
+            return Err(ServerError::AlreadyRunningError);
+        }
+
+        let pid_file = instance_path.join(PID_FILE_NAME);
+
+        if !pid_file.exists() {
+            return Err(ServerError::AlreadyRunningError);
+        }
+
+        let pid = tokio::fs::read_to_string(&pid_file).await?;
+        let pid = pid.parse::<Pid>()?;
+        let system = System::new_all();
+        let process = system.process(pid);
+        if process.is_some() {
+            return Err(ServerError::AlreadyRunningError);
+        }
+        
+        Ok(())
     }
 
     pub async fn start(mut self) -> Result<RunningInstance<'a>, ServerError> {

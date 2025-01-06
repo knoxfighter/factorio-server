@@ -37,4 +37,6 @@ pub enum ServerError {
     DownloadError(String),
     #[error("In-Flight Error")]
     InFlightError,
+    #[error("Already-Running Error")]
+    AlreadyRunningError,
 }
