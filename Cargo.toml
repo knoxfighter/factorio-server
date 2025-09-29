@@ -1,25 +1,28 @@
 [package]
 name = "factorio_server"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-thiserror = "2.0.3"
-tokio = { version = "1.41.1", features = ["full"]}
-rand = "0.8.5"
+thiserror = "2.0.17"
+tokio = { version = "1.47.1", features = ["full"]}
+rand = "0.9.2"
 futures = "0.3.31"
-sysinfo = "0.32.0"
+sysinfo = "0.37.1"
 rcon = { version = "0.6.0", features = ["rt-tokio"] }
-reqwest = { version = "0.12.9", features = ["rustls-tls", "stream", "json", "cookies"] }
-tokio-util = { version = "0.7.12", features = ["compat"] }
-futures-lite = "2.5.0"
-async-compression = { version = "0.4.18", features = ["tokio", "xz"] }
+reqwest = { version = "0.12.23", features = ["rustls-tls", "stream", "json", "cookies"] }
+tokio-util = { version = "0.7.16", features = ["compat"] }
+futures-lite = "2.6.1"
+async-compression = { version = "0.4.32", features = ["tokio", "xz"] }
 tokio-tar = "0.3.1"
-serde = { version = "1.0.215", features = ["derive"] }
-serde_json = "1.0.133"
-scraper = "0.21.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+scraper = "0.24.0"
 dashmap = "6.1.0"
-rc-zip-tokio = "4.2.3"
+rc-zip-tokio = "4.2.7"
 
 [dependencies.prognest]
 git = "https://github.com/greaka/prognest.git"
+
+[dev-dependencies]
+dotenvy = "0.15.7"

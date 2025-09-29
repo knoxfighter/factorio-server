@@ -4,7 +4,7 @@ use std::io::SeekFrom::Start;
 use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
-use sysinfo::{Pid, ProcessRefreshKind, RefreshKind, System};
+use sysinfo::{Pid, RefreshKind, System};
 use tokio::fs::File;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncSeekExt, BufReader};
 use tokio::sync::broadcast::Sender;
@@ -93,7 +93,7 @@ impl FactorioTracker {
                         let pid = Pid::from_str(&buf)?;
 
                         let system = System::new_with_specifics(
-                            RefreshKind::new().with_processes(ProcessRefreshKind::everything()),
+                            RefreshKind::everything(),
                         );
                         let process = system.process(pid);
                         if process.is_none() {

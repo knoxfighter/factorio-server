@@ -4,7 +4,7 @@ use crate::manager::Manager;
 use crate::utilities::{get_random_port, symlink_file, symlink_folder};
 use crate::version::Version;
 use crate::Progress;
-use rand::distributions::Alphanumeric;
+use rand::distr::Alphanumeric;
 use rand::Rng;
 use rcon::Connection;
 use serde::Serialize;
@@ -111,7 +111,7 @@ impl InstanceSettings {
             port: 34197u16,
             rcon_host: default_addr,
             rcon_port: 0u16,
-            rcon_pass: rand::thread_rng()
+            rcon_pass: rand::rng()
                 .sample_iter(&Alphanumeric)
                 .take(16)
                 .map(char::from)
@@ -289,7 +289,6 @@ impl<'a> Instance<'a> {
         }
 
         let pid_file = instance_path.join(PID_FILE_NAME);
-
         if !pid_file.exists() {
             return Err(ServerError::AlreadyRunningError);
         }

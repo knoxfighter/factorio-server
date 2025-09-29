@@ -525,8 +525,9 @@ mod test {
     async fn test() {
         let mut cache = Cache::new(PathBuf::from("/tmp")).unwrap();
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
-        // cache.credentials.login("asdff45", "<pw>").await.unwrap();
-        // cache.credentials.save().unwrap();
+
+        cache.credentials.login(dotenvy::var("factorio_username").unwrap(), dotenvy::var("factorio_password").unwrap()).await.unwrap();
+        cache.credentials.save().unwrap();
 
         let mut progress = Progress::new(10000);
 
@@ -541,10 +542,10 @@ mod test {
         let mut progress = Progress::new(10000);
 
         cache
-            .get_mod("Bottleneck", &Version::from([0, 11, 17]), &mut progress)
+            .get_mod("Bottleneck", &Version::from([0, 11, 7]), &mut progress)
             .await
             .unwrap();
 
-        panic!("something, so log is shown");
+        // panic!("something, so log is shown");
     }
 }

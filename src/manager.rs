@@ -1,3 +1,4 @@
+use std::fs::create_dir_all;
 use crate::cache::Cache;
 use crate::data::Data;
 use crate::error::ServerError;
@@ -17,6 +18,7 @@ pub struct Manager {
 impl Manager {
     pub fn new(root_path: impl Into<PathBuf>) -> Result<Self, ServerError> {
         let root_path = root_path.into();
+        create_dir_all(&root_path)?;
 
         Ok(Self {
             root_path: root_path.clone(),
@@ -119,13 +121,13 @@ mod test {
     #[tokio::test]
     async fn test() {
         #[cfg(target_os = "linux")]
-        let manager = Manager::new("/mnt/c/Data/Development/tmp/factorio-server-root");
+        let manager = Manager::new("/mnt/c/Data/Development/tmp/factorio-server-root").unwrap();
         #[cfg(target_os = "windows")]
         let manager =
             Manager::new("C:\\Data\\Development\\tmp\\factorio-server-root-windows").unwrap();
 
         let mut settings =
-            InstanceSettings::new("test4".to_string(), Version::from([1, 1, 110])).unwrap();
+            InstanceSettings::new("test3".to_string(), Version::from([1, 1, 110])).unwrap();
         settings.add_mod("AutoDeconstruct", Version::from([0, 4, 4]));
         settings.add_mod("RateCalculator", Version::from([3, 2, 7])); // doesn't load, needs flib
 
@@ -137,7 +139,7 @@ mod test {
             .unwrap();
         let mut instance = instance.start().await.unwrap();
 
-        sleep(Duration::from_secs(120)).await;
+        sleep(Duration::from_secs(5)).await;
 
         instance.stop().await.unwrap();
     }
