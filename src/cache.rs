@@ -1,8 +1,9 @@
+use crate::Progress;
 use crate::credentials::CredentialManager;
 use crate::error::ServerError;
 use crate::mod_portal::ModPortal;
+use crate::utilities::assure_subdir;
 use crate::version::Version;
-use crate::Progress;
 use dashmap::{DashMap, Entry};
 use futures_lite::StreamExt;
 use rc_zip_tokio::ReadZip;
@@ -11,12 +12,11 @@ use scraper::Selector;
 use std::collections::HashMap;
 use std::fs::remove_dir_all;
 use std::path::{Path, PathBuf};
-use tokio::fs::{create_dir_all, File};
+use tokio::fs::{File, create_dir_all};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio_util::either::Either;
-use tokio_util::io::InspectReader;
 
 type InFlight = DashMap<PathBuf, Sender<()>>;
 
@@ -44,9 +44,17 @@ impl Drop for SenderGuard<'_> {
 
 impl Cache {
     pub(crate) fn new(root_path: PathBuf) -> Result<Self, ServerError> {
+        let factorio_dir = root_path.join("factorio");
+        let mods_dir = root_path.join("mods");
+
+        // assure that the directories exist
+        assure_subdir(&root_path)?;
+        assure_subdir(&factorio_dir)?;
+        assure_subdir(&mods_dir)?;
+
         Ok(Self {
-            factorio_dir: root_path.join("factorio"),
-            mods_dir: root_path.join("mods"),
+            factorio_dir,
+            mods_dir,
             credentials: CredentialManager::load(root_path.join("credentials.json"))?,
             root_path,
             mod_portal: ModPortal::new()?,
@@ -105,6 +113,32 @@ impl Cache {
                             err
                         }
                     })?;
+
+                //////////////////////
+                // remove subfolder //
+                //////////////////////
+                let mut entries = tokio::fs::read_dir(&path).await?;
+                let entry = entries
+                    .next_entry()
+                    .await?
+                    .ok_or(ServerError::DownloadError(
+                        "missing subfolder after extracting tar".to_string(),
+                    ))?;
+
+                let mut entries = tokio::fs::read_dir(entry.path()).await?;
+                while let Some(entry) = entries.next_entry().await? {
+                    let sub_path = entry.path();
+                    let file_name = match sub_path.file_name() {
+                        Some(name) => name.to_os_string(),
+                        None => continue,
+                    };
+
+                    // Define destination path in the parent directory
+                    let dest_path = path.join(file_name);
+
+                    tokio::fs::rename(&sub_path, &dest_path).await?;
+                }
+                tokio::fs::remove_dir(&entry.path()).await?;
 
                 sender_guard.sender.send(()).ok();
 
@@ -292,29 +326,6 @@ impl Cache {
 
         archive.unpack(&path).await?;
 
-        let mut entries = tokio::fs::read_dir(&path).await?;
-        let entry = entries
-            .next_entry()
-            .await?
-            .ok_or(ServerError::DownloadError(
-                "missing subfolder after extracting tar".to_string(),
-            ))?;
-
-        let mut entries = tokio::fs::read_dir(entry.path()).await?;
-        while let Some(entry) = entries.next_entry().await? {
-            let sub_path = entry.path();
-            let file_name = match sub_path.file_name() {
-                Some(name) => name.to_os_string(),
-                None => continue,
-            };
-
-            // Define destination path in the parent directory
-            let dest_path = path.as_ref().join(file_name);
-
-            tokio::fs::rename(&sub_path, &dest_path).await?;
-        }
-        tokio::fs::remove_dir(&entry.path()).await?;
-
         if size.is_none() {
             progress.advance(1);
         }
@@ -374,7 +385,7 @@ impl Cache {
         Ok(())
     }
 
-    fn check_inflight(&self, path: PathBuf) -> Either<Receiver<()>, SenderGuard> {
+    fn check_inflight(&'_ self, path: PathBuf) -> Either<Receiver<()>, SenderGuard<'_>> {
         let entry = self.in_flight.entry(path.clone());
 
         match entry {
@@ -514,6 +525,22 @@ impl Cache {
 
         Ok(())
     }
+
+    pub async fn factorio_login(
+        &mut self,
+        username: impl AsRef<str>,
+        password: impl AsRef<str>,
+    ) -> Result<(), ServerError> {
+        self.credentials.login(username, password).await?;
+        self.credentials.save()?;
+        Ok(())
+    }
+
+    pub async fn factorio_logout(&mut self) -> Result<(), ServerError> {
+        self.credentials.logout();
+        self.credentials.save()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -526,7 +553,14 @@ mod test {
         let mut cache = Cache::new(PathBuf::from("/tmp")).unwrap();
         // let mut cache = Cache::new(PathBuf::from("C:\\Data\\tmp\\factorio")).unwrap();
 
-        cache.credentials.login(dotenvy::var("factorio_username").unwrap(), dotenvy::var("factorio_password").unwrap()).await.unwrap();
+        cache
+            .credentials
+            .login(
+                dotenvy::var("factorio_username").unwrap(),
+                dotenvy::var("factorio_password").unwrap(),
+            )
+            .await
+            .unwrap();
         cache.credentials.save().unwrap();
 
         let mut progress = Progress::new(10000);

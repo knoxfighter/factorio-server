@@ -92,8 +92,12 @@ impl CredentialManager {
     }
 
     pub fn save(&self) -> Result<(), ServerError> {
-        let file = File::create(&self.save_file)?;
-        serde_json::to_writer(file, &self.credentials)?;
+        if self.credentials.is_some() {
+            let file = File::create(&self.save_file)?;
+            serde_json::to_writer(file, &self.credentials)?;
+        } else {
+            std::fs::remove_file(&self.save_file)?;
+        }
 
         Ok(())
     }
@@ -106,5 +110,9 @@ impl CredentialManager {
         self.credentials
             .clone()
             .ok_or(ServerError::NotAllowed("No credentials found".to_string()))
+    }
+
+    pub fn logout(&mut self) {
+        self.credentials = None;
     }
 }

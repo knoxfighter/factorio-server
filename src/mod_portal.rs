@@ -8,40 +8,41 @@ pub struct ModPortal {
 }
 
 #[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Sort {
     #[default]
-    name,
-    created_at,
-    updated_at,
+    Name,
+    CreatedAt,
+    UpdatedAt,
 }
 #[derive(Default, Serialize, Deserialize)]
 pub enum SortOrder {
     #[default]
     #[serde(rename = "asc")]
-    ascending,
+    Ascending,
     #[serde(rename = "desc")]
-    descending,
+    Descending,
 }
 
 #[derive(Default, Serialize, Deserialize)]
 pub enum FactorioVersion {
     #[serde(rename = "0.13")]
-    version_0_13,
+    Version0_13,
     #[serde(rename = "0.14")]
-    version_0_14,
+    Version0_14,
     #[serde(rename = "0.15")]
-    version_0_15,
+    Version0_15,
     #[serde(rename = "0.16")]
-    version_0_16,
+    Version0_16,
     #[serde(rename = "0.17")]
-    version_0_17,
+    Version0_17,
     #[serde(rename = "0.18")]
-    version_0_18,
+    Version0_18,
     #[serde(rename = "1.0")]
-    version_1_0,
+    Version1_0,
     #[default]
     #[serde(rename = "1.1")]
-    version_1_1,
+    Version1_1,
 }
 
 pub struct ModListParameter {
@@ -143,25 +144,24 @@ pub struct Release {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
 pub enum Tag {
-    transportation,
-    logistics,
-    combat,
-    enemies,
-    armor,
-    environment,
-    #[serde(rename = "logistic-network")]
-    logistic_network,
-    #[serde(rename = "circuit-network")]
-    circuit_network,
-    storage,
-    power,
-    manufacturing,
-    blueprints,
-    cheats,
-    mining,
-    fluids,
-    trains,
+    Transportation,
+    Logistics,
+    Combat,
+    Enemies,
+    Armor,
+    Environment,
+    LogisticNetwork,
+    CircuitNetwork,
+    Storage,
+    Power,
+    Manufacturing,
+    Blueprints,
+    Cheats,
+    Mining,
+    Fluids,
+    Trains,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -174,18 +174,17 @@ pub struct License {
 }
 
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "kebab-case")]
 pub enum Category {
-    #[serde(rename = "no-category")]
-    no_category,
-    content,
-    overhaul,
-    tweaks,
-    utilities,
-    scenarios,
-    #[serde(rename = "mod-packs")]
-    mod_packs,
-    localizations,
-    internal,
+    NoCategory,
+    Content,
+    Overhaul,
+    Tweaks,
+    Utilities,
+    Scenarios,
+    ModPacks,
+    Localizations,
+    Internal,
 }
 
 impl ModPortal {

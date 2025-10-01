@@ -1,11 +1,11 @@
+use crate::Progress;
 use crate::error::ServerError;
 use crate::factorio_tracker::FactorioTracker;
 use crate::manager::Manager;
 use crate::utilities::{get_random_port, symlink_file, symlink_folder};
 use crate::version::Version;
-use crate::Progress;
-use rand::distr::Alphanumeric;
 use rand::Rng;
+use rand::distr::Alphanumeric;
 use rcon::Connection;
 use serde::Serialize;
 use std::net::{IpAddr, Ipv4Addr};
@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 use sysinfo::{Pid, System};
-use tokio::fs::{create_dir_all, remove_dir_all, File};
+use tokio::fs::{File, create_dir_all, remove_dir_all};
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 use tokio::process::{Child, Command};
@@ -283,14 +283,13 @@ impl<'a> Instance<'a> {
 
     pub(crate) async fn check_running(instance_path: impl AsRef<Path>) -> Result<(), ServerError> {
         let instance_path = instance_path.as_ref();
-
         if !instance_path.exists() {
-            return Err(ServerError::AlreadyRunningError);
+            return Ok(());
         }
 
         let pid_file = instance_path.join(PID_FILE_NAME);
         if !pid_file.exists() {
-            return Err(ServerError::AlreadyRunningError);
+            return Ok(());
         }
 
         let pid = tokio::fs::read_to_string(&pid_file).await?;
@@ -300,7 +299,7 @@ impl<'a> Instance<'a> {
         if process.is_some() {
             return Err(ServerError::AlreadyRunningError);
         }
-        
+
         Ok(())
     }
 

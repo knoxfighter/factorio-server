@@ -51,3 +51,11 @@ pub(crate) fn symlink_folder(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> io
         symlink(src, dst)
     }
 }
+
+pub(crate) fn assure_subdir(path: impl AsRef<Path>) -> io::Result<()> {
+    let path = path.as_ref();
+    if !path.exists() {
+        std::fs::create_dir(path)?;
+    }
+    Ok(())
+}

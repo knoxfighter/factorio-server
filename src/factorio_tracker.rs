@@ -92,9 +92,7 @@ impl FactorioTracker {
                         file.read_to_string(&mut buf).await?;
                         let pid = Pid::from_str(&buf)?;
 
-                        let system = System::new_with_specifics(
-                            RefreshKind::everything(),
-                        );
+                        let system = System::new_with_specifics(RefreshKind::everything());
                         let process = system.process(pid);
                         if process.is_none() {
                             sender.send(String::from("factorio process stopped"))?;

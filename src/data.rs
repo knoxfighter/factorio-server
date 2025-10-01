@@ -1,27 +1,37 @@
 use crate::error::ServerError;
-use crate::utilities::get_file_size;
+use crate::utilities::{assure_subdir, get_file_size};
 use std::fs::remove_file;
 use std::io;
 use std::path::{Path, PathBuf};
-use tokio::fs::{create_dir_all, File};
+use tokio::fs::{File, create_dir_all};
 
 pub(crate) struct Data {
-    root_folder: PathBuf,
-    saves_folder: PathBuf,
-    files_folder: PathBuf,
+    root_path: PathBuf,
+    saves_path: PathBuf,
+    files_path: PathBuf,
 }
 
 impl Data {
-    pub(crate) fn new(root_folder: impl AsRef<Path>) -> Self {
-        Self {
-            root_folder: root_folder.as_ref().into(),
-            saves_folder: root_folder.as_ref().join("saves"),
-            files_folder: root_folder.as_ref().join("files"),
-        }
+    pub(crate) fn new(root_path: impl AsRef<Path>) -> Result<Self, ServerError> {
+        let root_path = root_path.as_ref();
+
+        let saves_path = root_path.join("saves");
+        let files_path = root_path.join("files");
+
+        // assure that the directories exist
+        assure_subdir(&root_path)?;
+        assure_subdir(&saves_path)?;
+        assure_subdir(&files_path)?;
+
+        Ok(Self {
+            root_path: root_path.into(),
+            saves_path,
+            files_path,
+        })
     }
 
     pub(crate) fn get_saves_folder(&self, name: &String) -> Result<PathBuf, ServerError> {
-        let path = self.saves_folder.join(name);
+        let path = self.saves_path.join(name);
         if !path.exists() {
             return Err(ServerError::NotAllowed("Save folder not found".into()));
         }
@@ -59,7 +69,7 @@ impl Data {
         file_name: impl AsRef<str>,
         amount: u8,
     ) -> io::Result<PathBuf> {
-        let instance_path = self.files_folder.join(instance_name.as_ref());
+        let instance_path = self.files_path.join(instance_name.as_ref());
 
         create_dir_all(&instance_path).await?;
 
@@ -80,7 +90,7 @@ impl Data {
         instance_name: impl AsRef<str>,
         file_name: impl AsRef<str>,
     ) -> io::Result<PathBuf> {
-        let instance_path = self.files_folder.join(instance_name.as_ref());
+        let instance_path = self.files_path.join(instance_name.as_ref());
         create_dir_all(&instance_path).await?;
         Ok(instance_path.join(file_name.as_ref()))
     }

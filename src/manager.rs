@@ -1,10 +1,11 @@
-use std::fs::create_dir_all;
+use crate::Progress;
 use crate::cache::Cache;
 use crate::data::Data;
 use crate::error::ServerError;
 use crate::instance::{Instance, InstanceSettings};
+use crate::utilities::assure_subdir;
 use crate::version::Version;
-use crate::Progress;
+use std::fs::create_dir_all;
 use std::path::{Path, PathBuf};
 use tokio::fs::rename;
 
@@ -20,11 +21,14 @@ impl Manager {
         let root_path = root_path.into();
         create_dir_all(&root_path)?;
 
+        let instances_path = root_path.join("instances");
+        assure_subdir(&instances_path)?;
+
         Ok(Self {
             root_path: root_path.clone(),
             cache: Cache::new(root_path.join("cache"))?,
-            data: Data::new(root_path.join("data")),
-            instances_path: root_path.join("instances"),
+            data: Data::new(root_path.join("data"))?,
+            instances_path,
         })
     }
 
@@ -34,7 +38,7 @@ impl Manager {
         name: String,
         settings: InstanceSettings,
         progress: &mut Progress,
-    ) -> Result<Instance, ServerError> {
+    ) -> Result<Instance<'_>, ServerError> {
         let instance_path = self.instances_path.join(&name);
 
         Instance::check_running(&instance_path).await?;
@@ -121,10 +125,19 @@ mod test {
     #[tokio::test]
     async fn test() {
         #[cfg(target_os = "linux")]
-        let manager = Manager::new("/mnt/c/Data/Development/tmp/factorio-server-root").unwrap();
+        let mut manager = Manager::new("/mnt/c/Data/Development/tmp/factorio-server-root").unwrap();
         #[cfg(target_os = "windows")]
-        let manager =
+        let mut manager =
             Manager::new("C:\\Data\\Development\\tmp\\factorio-server-root-windows").unwrap();
+
+        manager
+            .cache
+            .factorio_login(
+                dotenvy::var("factorio_username").unwrap(),
+                dotenvy::var("factorio_password").unwrap(),
+            )
+            .await
+            .unwrap();
 
         let mut settings =
             InstanceSettings::new("test3".to_string(), Version::from([1, 1, 110])).unwrap();
