@@ -1,9 +1,9 @@
-use crate::Progress;
 use crate::credentials::CredentialManager;
 use crate::error::ServerError;
 use crate::mod_portal::ModPortal;
 use crate::utilities::assure_subdir;
 use crate::version::Version;
+use crate::Progress;
 use dashmap::{DashMap, Entry};
 use futures_lite::StreamExt;
 use rc_zip_tokio::ReadZip;
@@ -12,7 +12,7 @@ use scraper::Selector;
 use std::collections::HashMap;
 use std::fs::remove_dir_all;
 use std::path::{Path, PathBuf};
-use tokio::fs::{File, create_dir_all};
+use tokio::fs::{create_dir_all, File};
 use tokio::io::AsyncWriteExt;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::{Receiver, Sender};
@@ -265,7 +265,7 @@ impl Cache {
 
                 let entry_reader = entry.reader();
 
-                let mut entry_reader = InspectReader::new(entry_reader, |data| {
+                let mut entry_reader = tokio_util::io::InspectReader::new(entry_reader, |data| {
                     entry_progress.advance(data.len() as u64)
                 });
 
