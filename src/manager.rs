@@ -32,6 +32,10 @@ impl Manager {
         })
     }
 
+    pub fn cache(&self) -> &Cache {
+        &self.cache
+    }
+
     /// prepare a new instance, will download and await factorio and all needed mods.
     pub async fn prepare_instance(
         &self,

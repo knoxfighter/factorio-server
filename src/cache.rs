@@ -80,7 +80,7 @@ impl Cache {
     /// ```
     ///
     /// ```
-    pub async fn get_factorio(
+    pub(crate) async fn get_factorio(
         &self,
         version: &Version,
         progress: &mut Progress,
@@ -333,16 +333,16 @@ impl Cache {
         Ok(())
     }
 
-    // return (available, downloaded)
+    // return Map of Version -> (available, downloaded)
     pub async fn get_available_versions(
         &self,
-    ) -> Result<HashMap<String, (bool, bool)>, ServerError> {
+    ) -> Result<HashMap<Version, (bool, bool)>, ServerError> {
         let mut versions = HashMap::new();
 
         let mut dir_reader = tokio::fs::read_dir(&self.factorio_dir).await?;
         while let Some(file) = dir_reader.next_entry().await? {
-            let name = file.file_name().to_str().unwrap().into();
-            let value = versions.entry(name).or_insert((false, false));
+            let name: Version = file.file_name().to_str().unwrap().parse()?;
+            let value = versions.entry(name).or_insert((false, true));
             value.1 = true;
         }
 
@@ -364,15 +364,14 @@ impl Cache {
                 "href link is wrongly formatted".to_string(),
             ))?;
 
-            let value = versions
-                .entry(version.to_string())
-                .or_insert((false, false));
+            let value = versions.entry(version.parse()?).or_insert((false, false));
             value.0 = true;
         }
 
         Ok(versions)
     }
 
+    // TODO: maybe add check if this factorio version is in use and the instance is running
     pub async fn delete_version(&self, version: impl AsRef<str>) -> Result<(), ServerError> {
         let version = version.as_ref();
 
@@ -423,7 +422,7 @@ impl Cache {
     /// ```
     ///
     /// ```
-    pub async fn get_mod(
+    pub(crate) async fn get_mod(
         &self,
         name: impl AsRef<str>,
         version: &Version,

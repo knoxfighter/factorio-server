@@ -39,4 +39,6 @@ pub enum ServerError {
     InFlightError,
     #[error("Already-Running Error")]
     AlreadyRunningError,
+    #[error("Invalid Version Format: {0}")]
+    InvalidVersionFormat(String),
 }
